@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-color: #f0f4f8;
+    --surface: rgba(255, 255, 255, 0.7);
+    --surface-border: rgba(0, 0, 0, 0.1);
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --accent: 59 130 246; /* #3b82f6 */
+    --accent-hover: 37 99 235; /* #2563eb */
+    --success: 16 185 129; /* #10b981 */
+    --warn: 245 158 11; /* #f59e0b */
+    --danger: 239 68 68; /* #ef4444 */
+    
+    --bg-gradient: radial-gradient(circle at top right, rgba(59, 130, 246, 0.1), transparent 40%),
+                   radial-gradient(circle at bottom left, rgba(16, 185, 129, 0.05), transparent 40%);
+  }
+
+  .dark {
+    --bg-color: #020617;
+    --surface: rgba(30, 41, 59, 0.6);
+    --surface-border: rgba(255, 255, 255, 0.1);
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --accent: 96 165 250; /* #60a5fa */
+    --accent-hover: 59 130 246; /* #3b82f6 */
+    
+    --bg-gradient: radial-gradient(circle at top right, rgba(96, 165, 250, 0.15), transparent 40%),
+                   radial-gradient(circle at bottom left, rgba(16, 185, 129, 0.1), transparent 40%);
+  }
+
+  body {
+    @apply bg-background text-text-primary font-sans antialiased min-h-screen transition-colors duration-500 ease-out;
+    background-image: var(--bg-gradient);
+    background-attachment: fixed;
+    perspective: 1200px;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-surface backdrop-blur-xl border border-surface-border rounded-2xl shadow-glass;
+    will-change: transform, opacity;
+  }
+  
+  .glass-panel {
+    @apply bg-black/5 dark:bg-black/20 border border-surface-border rounded-xl;
+  }
+  
+  .btn-primary {
+    @apply bg-accent hover:bg-accent-hover text-white px-6 py-3 rounded-xl font-medium transition-all duration-300 shadow-lg hover:shadow-accent/25 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:pointer-events-none;
+  }
+  
+  .input-field {
+    @apply bg-surface border border-surface-border rounded-xl px-4 py-3 text-text-primary outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all duration-300 w-full;
+  }
+
+  .verdict-pass {
+    @apply bg-success/10 border-success/30 text-success;
+  }
+  
+  .verdict-warn {
+    @apply bg-warn/10 border-warn/30 text-warn;
+  }
+  
+  .verdict-block {
+    @apply bg-danger/10 border-danger/30 text-danger;
+  }
+}
+
+/* 3D and Scroll specific utilities */
+.perspective-container {
+  perspective: 1500px;
+}
+
+.preserve-3d {
+  transform-style: preserve-3d;
+}
