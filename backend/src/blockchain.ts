@@ -313,11 +313,19 @@ export const walletClient = createWalletClient({
   transport: http(rpcUrl),
 });
 
+import {
+  VerificationChecklistItem,
+  BalanceVerificationDetails,
+  VerificationStatus
+} from './intent-comparison';
+
 export interface ExecutionResult {
   hash: `0x${string}`;
   status: 'confirmed' | 'pending';
   receipt?: any;
   message: string;
+  checklist: VerificationChecklistItem[];
+  balanceVerification: BalanceVerificationDetails;
 }
 
 export async function executeAndVerifyTransaction(
@@ -327,7 +335,54 @@ export async function executeAndVerifyTransaction(
   await assertSepoliaChainId();
   const unsignedTx = await constructUnsignedTransaction(intent, resolvedAddress);
   const account = getSenderAccount();
-  
+
+  // 1. Capture pre-execution balances immediately before signing/broadcast
+  // Fail closed if balance queries fail - never assume or report zero balance on error
+  let preSenderEth: bigint;
+  try {
+    preSenderEth = await publicClient.getBalance({ address: account.address });
+    if (typeof preSenderEth !== 'bigint') {
+      throw new Error('Non-integer balance returned from RPC');
+    }
+  } catch (err: any) {
+    throw new Error(`Failed to capture pre-execution ETH balance before broadcast: ${err.message}`);
+  }
+
+  let preSenderUsdc: bigint | undefined;
+  let preRecipientUsdc: bigint | undefined;
+  const usdcAddress = unsignedTx.asset === 'USDC' ? getSepoliaUsdcAddress() : undefined;
+
+  if (unsignedTx.asset === 'USDC') {
+    try {
+      preSenderUsdc = await publicClient.readContract({
+        address: usdcAddress!,
+        abi: erc20Abi,
+        functionName: 'balanceOf',
+        args: [account.address],
+      });
+      if (typeof preSenderUsdc !== 'bigint') {
+        throw new Error('Non-integer sender USDC balance returned from RPC');
+      }
+    } catch (err: any) {
+      throw new Error(`Failed to capture pre-execution sender USDC balance before broadcast: ${err.message}`);
+    }
+
+    try {
+      preRecipientUsdc = await publicClient.readContract({
+        address: usdcAddress!,
+        abi: erc20Abi,
+        functionName: 'balanceOf',
+        args: [resolvedAddress as `0x${string}`],
+      });
+      if (typeof preRecipientUsdc !== 'bigint') {
+        throw new Error('Non-integer recipient USDC balance returned from RPC');
+      }
+    } catch (err: any) {
+      throw new Error(`Failed to capture pre-execution recipient USDC balance before broadcast: ${err.message}`);
+    }
+  }
+
+  // Broadcast transaction
   const hash = await walletClient.sendTransaction({
     account,
     to: unsignedTx.to,
@@ -349,11 +404,56 @@ export async function executeAndVerifyTransaction(
     }
 
     // Receipt wait timed out or failed to retrieve receipt after successful broadcast.
-    // Do NOT retry or rebroadcast; return pending confirmation.
+    // Do NOT retry or rebroadcast; return pending confirmation without premature verification.
+    const pendingChecklist: VerificationChecklistItem[] = [
+      {
+        id: 'hash',
+        label: 'Transaction hash available',
+        status: 'passed',
+        description: `Broadcast hash: ${hash}`
+      },
+      {
+        id: 'receipt',
+        label: 'Transaction receipt confirmed',
+        status: 'pending',
+        description: 'Waiting for on-chain block confirmation'
+      },
+      {
+        id: 'recipient',
+        label: 'Recipient or token contract matches',
+        status: 'pending',
+        description: 'Verification pending receipt confirmation'
+      },
+      {
+        id: 'intent',
+        label: 'Asset and amount match the validated intent',
+        status: 'pending',
+        description: 'Verification pending receipt confirmation'
+      },
+      {
+        id: 'balance',
+        label: 'Expected sender/recipient balance changes verified',
+        status: 'pending',
+        description: 'Balance verification pending receipt confirmation'
+      }
+    ];
+
+    const pendingBalanceDetails: BalanceVerificationDetails = {
+      status: 'pending',
+      asset: unsignedTx.asset || 'ETH',
+      preSenderEth: preSenderEth.toString(),
+      preSenderUsdc: preSenderUsdc !== undefined ? preSenderUsdc.toString() : undefined,
+      preRecipientUsdc: preRecipientUsdc !== undefined ? preRecipientUsdc.toString() : undefined,
+      expectedTransferUnits: (unsignedTx.tokenAmountUnits ?? unsignedTx.value).toString(),
+      details: 'Transaction broadcast; receipt and balance verification pending.'
+    };
+
     return {
       hash,
       status: 'pending',
-      message: `Transaction broadcasted (${hash}) but confirmation timed out. Confirmation is pending on-chain.`
+      message: `Transaction broadcasted (${hash}) but confirmation timed out. Transaction broadcast; receipt and balance verification pending.`,
+      checklist: pendingChecklist,
+      balanceVerification: pendingBalanceDetails
     };
   }
 
@@ -361,8 +461,9 @@ export async function executeAndVerifyTransaction(
     throw new Error('Transaction reverted on-chain');
   }
 
+  // 2. Receipt confirmed: verify broadcasted fields
   const broadcastedTx = await publicClient.getTransaction({ hash });
-  
+
   if (unsignedTx.asset === 'ETH') {
     if (broadcastedTx.to?.toLowerCase() !== resolvedAddress.toLowerCase()) {
       throw new Error(`CRITICAL: Broadcasted recipient ${broadcastedTx.to} does not match intended ${resolvedAddress}`);
@@ -371,8 +472,7 @@ export async function executeAndVerifyTransaction(
       throw new Error(`CRITICAL: Broadcasted amount ${broadcastedTx.value} does not match intended ${unsignedTx.value}`);
     }
   } else if (unsignedTx.asset === 'USDC') {
-    const usdcAddress = getSepoliaUsdcAddress();
-    if (broadcastedTx.to?.toLowerCase() !== usdcAddress.toLowerCase()) {
+    if (broadcastedTx.to?.toLowerCase() !== usdcAddress!.toLowerCase()) {
       throw new Error(`CRITICAL: Broadcasted target contract ${broadcastedTx.to} does not match USDC address ${usdcAddress}`);
     }
     if (broadcastedTx.input !== unsignedTx.data) {
@@ -380,10 +480,187 @@ export async function executeAndVerifyTransaction(
     }
   }
 
+  // 3. Post-execution balance queries
+  // Fail-safe: RPC failures reading post-balances MUST report as inconclusive, NOT throw as revert
+  let postSenderEth: bigint | undefined;
+  let postSenderUsdc: bigint | undefined;
+  let postRecipientUsdc: bigint | undefined;
+  let postBalanceReadError: string | null = null;
+
+  try {
+    postSenderEth = await publicClient.getBalance({ address: account.address });
+    if (typeof postSenderEth !== 'bigint') {
+      throw new Error('Non-integer balance returned from RPC');
+    }
+  } catch (err: any) {
+    postBalanceReadError = `Failed to query post-execution ETH balance: ${err.message}`;
+  }
+
+  if (unsignedTx.asset === 'USDC' && !postBalanceReadError) {
+    try {
+      postSenderUsdc = await publicClient.readContract({
+        address: usdcAddress!,
+        abi: erc20Abi,
+        functionName: 'balanceOf',
+        args: [account.address],
+      });
+      if (typeof postSenderUsdc !== 'bigint') {
+        throw new Error('Non-integer sender USDC balance returned from RPC');
+      }
+    } catch (err: any) {
+      postBalanceReadError = `Failed to query post-execution sender USDC balance: ${err.message}`;
+    }
+
+    if (!postBalanceReadError) {
+      try {
+        postRecipientUsdc = await publicClient.readContract({
+          address: usdcAddress!,
+          abi: erc20Abi,
+          functionName: 'balanceOf',
+          args: [resolvedAddress as `0x${string}`],
+        });
+        if (typeof postRecipientUsdc !== 'bigint') {
+          throw new Error('Non-integer recipient USDC balance returned from RPC');
+        }
+      } catch (err: any) {
+        postBalanceReadError = `Failed to query post-execution recipient USDC balance: ${err.message}`;
+      }
+    }
+  }
+
+  // 4. Calculate actual gas fees and balance deltas using exact integer arithmetic (bigint)
+  const gasUsed = receipt.gasUsed !== undefined && receipt.gasUsed !== null ? BigInt(receipt.gasUsed) : 0n;
+  const effectiveGasPrice = receipt.effectiveGasPrice !== undefined && receipt.effectiveGasPrice !== null
+    ? BigInt(receipt.effectiveGasPrice)
+    : receipt.gasPrice !== undefined && receipt.gasPrice !== null
+      ? BigInt(receipt.gasPrice)
+      : 0n;
+  const actualGasFeeWei = gasUsed * effectiveGasPrice;
+  const actualGasFeeEth = formatEther(actualGasFeeWei);
+
+  let balanceStatus: 'passed' | 'mismatch' | 'inconclusive';
+  let balanceDetails: string;
+  let checklistBalanceStatus: VerificationStatus;
+
+  let senderEthDelta: bigint | undefined;
+  let senderUsdcDelta: bigint | undefined;
+  let recipientUsdcDelta: bigint | undefined;
+
+  if (postSenderEth !== undefined) {
+    senderEthDelta = preSenderEth - postSenderEth;
+  }
+  if (preSenderUsdc !== undefined && postSenderUsdc !== undefined) {
+    senderUsdcDelta = preSenderUsdc - postSenderUsdc;
+  }
+  if (preRecipientUsdc !== undefined && postRecipientUsdc !== undefined) {
+    recipientUsdcDelta = postRecipientUsdc - preRecipientUsdc;
+  }
+
+  if (postBalanceReadError) {
+    balanceStatus = 'inconclusive';
+    checklistBalanceStatus = 'inconclusive';
+    balanceDetails = `Post-execution balance verification inconclusive: ${postBalanceReadError}. Receipt is confirmed on-chain.`;
+  } else if (unsignedTx.asset === 'ETH') {
+    const expectedEthDecrease = unsignedTx.value + actualGasFeeWei;
+    if (senderEthDelta === expectedEthDecrease) {
+      balanceStatus = 'passed';
+      checklistBalanceStatus = 'passed';
+      balanceDetails = `Sender ETH balance decreased by exact transfer amount (${unsignedTx.value.toString()} wei) + gas fee (${actualGasFeeWei.toString()} wei).`;
+    } else {
+      balanceStatus = 'mismatch';
+      checklistBalanceStatus = 'failed';
+      balanceDetails = `ETH balance delta mismatch: Sender ETH delta (${senderEthDelta?.toString() ?? 'unknown'} wei) does not match expected total decrease (${expectedEthDecrease.toString()} wei: transfer ${unsignedTx.value.toString()} wei + gas ${actualGasFeeWei.toString()} wei).`;
+    }
+  } else {
+    // USDC: verify sender's USDC decrease and recipient's USDC increase against the transfer amount
+    const expectedTransferUnits = unsignedTx.tokenAmountUnits!;
+    const usdcSenderMatched = senderUsdcDelta === expectedTransferUnits;
+    const usdcRecipientMatched = recipientUsdcDelta === expectedTransferUnits;
+
+    if (usdcSenderMatched && usdcRecipientMatched) {
+      balanceStatus = 'passed';
+      checklistBalanceStatus = 'passed';
+      balanceDetails = `Sender USDC decreased by ${expectedTransferUnits.toString()} units and recipient USDC increased by ${expectedTransferUnits.toString()} units. Actual ETH gas fee paid: ${actualGasFeeEth} ETH (${actualGasFeeWei.toString()} wei).`;
+    } else {
+      balanceStatus = 'mismatch';
+      checklistBalanceStatus = 'failed';
+      const mismatchReasons: string[] = [];
+      if (!usdcSenderMatched) {
+        mismatchReasons.push(`Sender USDC decrease (${senderUsdcDelta?.toString() ?? 'unknown'} units) != expected (${expectedTransferUnits.toString()} units)`);
+      }
+      if (!usdcRecipientMatched) {
+        mismatchReasons.push(`Recipient USDC increase (${recipientUsdcDelta?.toString() ?? 'unknown'} units) != expected (${expectedTransferUnits.toString()} units)`);
+      }
+      balanceDetails = `USDC balance delta mismatch: ${mismatchReasons.join('; ')}. Actual ETH gas fee paid: ${actualGasFeeEth} ETH.`;
+    }
+  }
+
+  // 5. Build structured verification checklist
+  const checklist: VerificationChecklistItem[] = [
+    {
+      id: 'receipt',
+      label: 'Transaction receipt confirmed',
+      status: 'passed',
+      description: `Confirmed in block ${receipt.blockNumber !== undefined ? receipt.blockNumber.toString() : 'latest'}`
+    },
+    {
+      id: 'recipient',
+      label: 'Recipient or token contract matches',
+      status: 'passed',
+      description: unsignedTx.asset === 'ETH'
+        ? `Recipient matches validated address ${resolvedAddress}`
+        : `Token contract matches verified Sepolia USDC address ${usdcAddress}`
+    },
+    {
+      id: 'intent',
+      label: 'Asset and amount match the validated intent',
+      status: 'passed',
+      description: unsignedTx.asset === 'ETH'
+        ? `Transfer value matches ${unsignedTx.tokenAmount ?? formatEther(unsignedTx.value)} ETH`
+        : `Transfer amount matches ${unsignedTx.tokenAmount} USDC`
+    },
+    {
+      id: 'balance',
+      label: 'Expected sender/recipient balance changes verified',
+      status: checklistBalanceStatus,
+      description: balanceDetails
+    },
+    {
+      id: 'hash',
+      label: 'Transaction hash available',
+      status: 'passed',
+      description: `Transaction hash: ${hash}`
+    }
+  ];
+
+  const balanceVerification: BalanceVerificationDetails = {
+    status: balanceStatus,
+    asset: unsignedTx.asset || 'ETH',
+    preSenderEth: preSenderEth.toString(),
+    postSenderEth: postSenderEth?.toString(),
+    senderEthDelta: senderEthDelta?.toString(),
+    actualGasFeeWei: actualGasFeeWei.toString(),
+    actualGasFeeEth,
+    preSenderUsdc: preSenderUsdc?.toString(),
+    postSenderUsdc: postSenderUsdc?.toString(),
+    senderUsdcDelta: senderUsdcDelta?.toString(),
+    preRecipientUsdc: preRecipientUsdc?.toString(),
+    postRecipientUsdc: postRecipientUsdc?.toString(),
+    recipientUsdcDelta: recipientUsdcDelta?.toString(),
+    expectedTransferUnits: (unsignedTx.tokenAmountUnits ?? unsignedTx.value).toString(),
+    details: balanceDetails
+  };
+
   return {
     hash,
     status: 'confirmed',
     receipt,
-    message: 'Transaction successfully executed and verified on-chain.'
+    message: balanceStatus === 'passed'
+      ? 'Transaction successfully executed, confirmed, and verified on-chain.'
+      : balanceStatus === 'inconclusive'
+        ? 'Transaction receipt confirmed, but post-execution balance verification was inconclusive.'
+        : 'Transaction receipt confirmed, but balance delta mismatch was detected.',
+    checklist,
+    balanceVerification
   };
 }

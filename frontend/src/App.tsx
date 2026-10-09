@@ -26,6 +26,8 @@ import {
   type Intent,
   type TransactionPreview,
   type RiskResult,
+  type VerificationChecklistItem,
+  type BalanceVerificationDetails,
   detectMismatches,
   isConfirmationAllowed
 } from './intent-comparison';
@@ -61,6 +63,8 @@ interface ExecuteResponse {
   hash?: string;
   error?: string;
   message?: string;
+  checklist?: VerificationChecklistItem[];
+  balanceVerification?: BalanceVerificationDetails;
 }
 
 function App() {
@@ -85,6 +89,8 @@ function App() {
     pending?: boolean;
     error?: string;
     message?: string;
+    checklist?: VerificationChecklistItem[];
+    balanceVerification?: BalanceVerificationDetails;
   } | null>(null);
 
   const [isListening, setIsListening] = useState(false);
@@ -347,9 +353,22 @@ function App() {
       }
 
       if (data.pending) {
-        setExecutionResult({ success: false, pending: true, hash: data.hash, message: data.message });
+        setExecutionResult({
+          success: false,
+          pending: true,
+          hash: data.hash,
+          message: data.message,
+          checklist: data.checklist,
+          balanceVerification: data.balanceVerification
+        });
       } else {
-        setExecutionResult({ success: true, hash: data.hash, message: data.message });
+        setExecutionResult({
+          success: true,
+          hash: data.hash,
+          message: data.message,
+          checklist: data.checklist,
+          balanceVerification: data.balanceVerification
+        });
       }
       // Invalidate approval token after use
       setApprovalToken(null);
@@ -849,17 +868,20 @@ function App() {
 
         {/* Execution Result Panel */}
         {executionResult && (
-          <section className="glass-card p-6 animate-card">
-            <h2 className="text-lg font-semibold mb-4">Execution Status</h2>
+          <section className="glass-card p-6 animate-card space-y-6">
+            <h2 className="text-lg font-semibold">Execution Status & On-Chain Verification</h2>
 
             {executionResult.pending ? (
               <div className="bg-warn/10 border border-warn/30 rounded-xl p-6 text-center">
                 <div className="w-16 h-16 bg-warn/20 text-warn rounded-full flex items-center justify-center mx-auto mb-4">
-                  <AlertTriangle className="w-8 h-8" />
+                  <RefreshCw className="w-8 h-8 animate-spin" />
                 </div>
                 <h3 className="text-xl font-bold text-warn mb-2">Confirmation Pending</h3>
-                <p className="text-text-secondary text-sm mb-4">
-                  {executionResult.message || 'Transaction was broadcasted, but confirmation timed out on Sepolia. Do not re-submit.'}
+                <p className="text-text-primary font-semibold text-sm mb-1">
+                  Transaction broadcast; receipt and balance verification pending.
+                </p>
+                <p className="text-text-secondary text-xs mb-4">
+                  Do not resubmit or rebroadcast this transaction. Receipt and balance changes are awaiting inclusion on Sepolia.
                 </p>
 
                 {executionResult.hash && (
@@ -875,12 +897,56 @@ function App() {
                 )}
               </div>
             ) : executionResult.success ? (
-              <div className="bg-success/10 border border-success/30 rounded-xl p-6 text-center">
-                <div className="w-16 h-16 bg-success/20 text-success rounded-full flex items-center justify-center mx-auto mb-4">
-                  <CheckCircle2 className="w-8 h-8" />
+              <div
+                className={`rounded-xl p-6 text-center border ${
+                  executionResult.balanceVerification?.status === 'inconclusive'
+                    ? 'bg-warn/10 border-warn/30'
+                    : executionResult.balanceVerification?.status === 'mismatch'
+                    ? 'bg-danger/10 border-danger/30'
+                    : 'bg-success/10 border-success/30'
+                }`}
+              >
+                <div
+                  className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${
+                    executionResult.balanceVerification?.status === 'inconclusive'
+                      ? 'bg-warn/20 text-warn'
+                      : executionResult.balanceVerification?.status === 'mismatch'
+                      ? 'bg-danger/20 text-danger'
+                      : 'bg-success/20 text-success'
+                  }`}
+                >
+                  {executionResult.balanceVerification?.status === 'inconclusive' ? (
+                    <AlertTriangle className="w-8 h-8" />
+                  ) : executionResult.balanceVerification?.status === 'mismatch' ? (
+                    <AlertCircle className="w-8 h-8" />
+                  ) : (
+                    <CheckCircle2 className="w-8 h-8" />
+                  )}
                 </div>
-                <h3 className="text-xl font-bold text-success mb-2">Transaction Successful</h3>
-                <p className="text-text-secondary text-sm mb-4">Your intent has been executed on the Sepolia network.</p>
+
+                <h3
+                  className={`text-xl font-bold mb-2 ${
+                    executionResult.balanceVerification?.status === 'inconclusive'
+                      ? 'text-warn'
+                      : executionResult.balanceVerification?.status === 'mismatch'
+                      ? 'text-danger'
+                      : 'text-success'
+                  }`}
+                >
+                  {executionResult.balanceVerification?.status === 'inconclusive'
+                    ? 'Receipt Confirmed — Balance Verification Inconclusive'
+                    : executionResult.balanceVerification?.status === 'mismatch'
+                    ? 'Receipt Confirmed — Balance Delta Mismatch'
+                    : 'Transaction Successfully Executed & Verified'}
+                </h3>
+
+                <p className="text-text-secondary text-sm mb-4">
+                  {executionResult.balanceVerification?.status === 'inconclusive'
+                    ? 'Transaction receipt was confirmed on-chain, but post-execution balance query was inconclusive. This does NOT indicate an on-chain revert.'
+                    : executionResult.balanceVerification?.status === 'mismatch'
+                    ? 'Transaction receipt confirmed, but observed balance delta did not match expected integer calculations.'
+                    : 'Your intent has been executed on Sepolia, receipt confirmed, and exact balance changes verified.'}
+                </p>
 
                 {executionResult.hash && (
                   <a
@@ -901,6 +967,138 @@ function App() {
                 </div>
                 <h3 className="text-xl font-bold text-danger mb-2">Execution Failed</h3>
                 <p className="text-danger/80 text-sm font-medium">{executionResult.error}</p>
+              </div>
+            )}
+
+            {/* Structured Verification Checklist */}
+            {executionResult.checklist && executionResult.checklist.length > 0 && (
+              <div className="border-t border-surface-border pt-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-semibold text-text-primary uppercase tracking-wider flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-accent" />
+                    Verification Checklist
+                  </h3>
+                  <span className="text-xs font-mono text-text-secondary">On-Chain Audit</span>
+                </div>
+
+                <div className="space-y-2.5">
+                  {executionResult.checklist.map((item) => (
+                    <div
+                      key={item.id}
+                      className="flex items-start justify-between gap-3 p-3.5 rounded-xl bg-surface/50 border border-surface-border"
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="mt-0.5 shrink-0">
+                          {item.status === 'passed' && (
+                            <CheckCircle2 className="w-5 h-5 text-success" />
+                          )}
+                          {item.status === 'failed' && (
+                            <XCircle className="w-5 h-5 text-danger" />
+                          )}
+                          {item.status === 'pending' && (
+                            <RefreshCw className="w-5 h-5 text-warn animate-spin" />
+                          )}
+                          {item.status === 'inconclusive' && (
+                            <AlertTriangle className="w-5 h-5 text-warn" />
+                          )}
+                        </div>
+                        <div>
+                          <div className="text-sm font-medium text-text-primary">{item.label}</div>
+                          {item.description && (
+                            <div className="text-xs text-text-secondary mt-0.5 font-mono break-all">{item.description}</div>
+                          )}
+                        </div>
+                      </div>
+                      <span
+                        className={`shrink-0 px-2.5 py-0.5 text-[11px] font-bold rounded-full uppercase tracking-wider ${
+                          item.status === 'passed'
+                            ? 'bg-success/15 text-success border border-success/30'
+                            : item.status === 'failed'
+                            ? 'bg-danger/15 text-danger border border-danger/30'
+                            : item.status === 'pending'
+                            ? 'bg-warn/15 text-warn border border-warn/30'
+                            : 'bg-warn/15 text-warn border border-warn/30'
+                        }`}
+                      >
+                        {item.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Balance Verification Breakdown (Integer Base Units) */}
+            {executionResult.balanceVerification && (
+              <div className="border-t border-surface-border pt-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-semibold text-text-primary uppercase tracking-wider flex items-center gap-2">
+                    <Wallet className="w-4 h-4 text-accent" />
+                    Balance Verification Breakdown ({executionResult.balanceVerification.asset})
+                  </h3>
+                  <span
+                    className={`px-2.5 py-0.5 text-[11px] font-bold rounded-full uppercase tracking-wider ${
+                      executionResult.balanceVerification.status === 'passed'
+                        ? 'bg-success/15 text-success border border-success/30'
+                        : executionResult.balanceVerification.status === 'mismatch'
+                        ? 'bg-danger/15 text-danger border border-danger/30'
+                        : executionResult.balanceVerification.status === 'inconclusive'
+                        ? 'bg-warn/15 text-warn border border-warn/30'
+                        : 'bg-surface text-text-secondary border border-surface-border'
+                    }`}
+                  >
+                    Status: {executionResult.balanceVerification.status}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
+                  <div className="p-3 rounded-lg bg-surface/50 border border-surface-border">
+                    <div className="text-text-secondary text-[10px] mb-1 uppercase tracking-wide">Sender Pre-ETH Balance</div>
+                    <div className="font-semibold text-text-primary break-all">{executionResult.balanceVerification.preSenderEth} wei</div>
+                  </div>
+                  <div className="p-3 rounded-lg bg-surface/50 border border-surface-border">
+                    <div className="text-text-secondary text-[10px] mb-1 uppercase tracking-wide">Sender Post-ETH Balance</div>
+                    <div className="font-semibold text-text-primary break-all">{executionResult.balanceVerification.postSenderEth ?? 'Pending confirmation'} wei</div>
+                  </div>
+                  <div className="p-3 rounded-lg bg-surface/50 border border-surface-border">
+                    <div className="text-text-secondary text-[10px] mb-1 uppercase tracking-wide">Observed Sender ETH Delta</div>
+                    <div className="font-semibold text-text-primary break-all">{executionResult.balanceVerification.senderEthDelta ?? 'Pending'} wei</div>
+                  </div>
+                  <div className="p-3 rounded-lg bg-surface/50 border border-surface-border">
+                    <div className="text-text-secondary text-[10px] mb-1 uppercase tracking-wide">Actual Gas Fee Paid</div>
+                    <div className="font-semibold text-text-primary break-all">
+                      {executionResult.balanceVerification.actualGasFeeWei ?? '0'} wei ({executionResult.balanceVerification.actualGasFeeEth ?? '0'} ETH)
+                    </div>
+                  </div>
+
+                  {executionResult.balanceVerification.asset === 'USDC' && (
+                    <>
+                      <div className="p-3 rounded-lg bg-surface/50 border border-surface-border">
+                        <div className="text-text-secondary text-[10px] mb-1 uppercase tracking-wide">Sender Pre-USDC Units</div>
+                        <div className="font-semibold text-text-primary break-all">{executionResult.balanceVerification.preSenderUsdc ?? '0'} units</div>
+                      </div>
+                      <div className="p-3 rounded-lg bg-surface/50 border border-surface-border">
+                        <div className="text-text-secondary text-[10px] mb-1 uppercase tracking-wide">Sender Post-USDC Units</div>
+                        <div className="font-semibold text-text-primary break-all">{executionResult.balanceVerification.postSenderUsdc ?? 'Pending'} units</div>
+                      </div>
+                      <div className="p-3 rounded-lg bg-surface/50 border border-surface-border">
+                        <div className="text-text-secondary text-[10px] mb-1 uppercase tracking-wide">Observed Sender USDC Delta</div>
+                        <div className="font-semibold text-text-primary break-all">{executionResult.balanceVerification.senderUsdcDelta ?? 'Pending'} units</div>
+                      </div>
+                      <div className="p-3 rounded-lg bg-surface/50 border border-surface-border">
+                        <div className="text-text-secondary text-[10px] mb-1 uppercase tracking-wide">Observed Recipient USDC Delta</div>
+                        <div className="font-semibold text-text-primary break-all">{executionResult.balanceVerification.recipientUsdcDelta ?? 'Pending'} units</div>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {executionResult.balanceVerification.details && (
+                  <div className="mt-3 p-3 rounded-lg bg-surface/60 border border-surface-border text-xs text-text-secondary">
+                    <span className="font-semibold text-text-primary">Verification Details: </span>
+                    {executionResult.balanceVerification.details}
+                  </div>
+                )}
               </div>
             )}
           </section>

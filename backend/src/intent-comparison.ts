@@ -26,6 +26,33 @@ export interface RiskResult {
   reasons: string[];
 }
 
+export type VerificationStatus = 'passed' | 'failed' | 'pending' | 'inconclusive';
+
+export interface VerificationChecklistItem {
+  id: 'hash' | 'receipt' | 'recipient' | 'intent' | 'balance';
+  label: string;
+  status: VerificationStatus;
+  description?: string;
+}
+
+export interface BalanceVerificationDetails {
+  status: 'passed' | 'mismatch' | 'inconclusive' | 'pending';
+  asset: 'ETH' | 'USDC';
+  preSenderEth: string;
+  postSenderEth?: string;
+  senderEthDelta?: string;
+  actualGasFeeWei?: string;
+  actualGasFeeEth?: string;
+  preSenderUsdc?: string;
+  postSenderUsdc?: string;
+  senderUsdcDelta?: string;
+  preRecipientUsdc?: string;
+  postRecipientUsdc?: string;
+  recipientUsdcDelta?: string;
+  expectedTransferUnits: string;
+  details?: string;
+}
+
 export interface FieldComparison {
   field: string;
   voiceValue: string;

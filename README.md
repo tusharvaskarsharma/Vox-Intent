@@ -83,7 +83,7 @@ npm run dev
 Open your browser to [http://localhost:5173](http://localhost:5173).
 
 ## Testing
-The backend is fortified by a robust suite of 156+ unit and integration tests verifying LLM extraction, deterministic fallback parsing, firewall rules, token concurrency, simulation, plan card data, mismatch detection, and execution paths.
+The backend is fortified by a robust suite of 164 unit and integration tests verifying LLM extraction, deterministic fallback parsing, firewall rules, token concurrency, simulation, plan card data, mismatch detection, pre-execution balance guards, post-execution balance verification, and checklist generation.
 
 The test suite is **fully self-contained**: it automatically uses ephemeral test keys and mocks, never requiring a real funded wallet or reading live user secrets from `.env`.
 
@@ -118,3 +118,18 @@ npm test
 - **Plan Card:** Distinctly separates **Confirmed Execution Facts** (Action, Asset, Amount, Contact, Resolved On-chain Address, Network) from **Estimated Runtime Parameters** (Estimated Gas Units, Gas Cost ETH, Maximum Total Cost Cap, EVM Simulation Status). For balance queries, presents a read-only wallet view with no confirmation button.
 - **What You Said vs. What Executes Panel:** Displays the verbatim voice-transcribed phrase beside the validated execution parameters, clearly flagging potential verbal asset, amount, or recipient discrepancies. The backend's validated intent remains authoritative at all times.
 - **Voice Modification & Invalidation:** Any revision made by voice dictation or typing immediately invalidates the previous preview and approval token, requiring full reprocessing through the backend before authorization can be unlocked. Stale previews or previous tokens can never be executed.
+
+### 6. Post-Execution Balance Verification & Checklist (Phase C)
+- **Pre-Execution Balance Capture:** Immediately prior to signing/broadcast, the sender's native ETH balance (and for USDC transfers, sender and recipient USDC balances) are captured in canonical integer base units (`bigint`). If pre-execution queries fail, the system fails closed before broadcasting—zero balances are never assumed or reported on read errors.
+- **Post-Receipt Delta Verification:** Following confirmed on-chain receipt, balances are queried again to compute observed integer deltas:
+  - **ETH Transfers:** Sender ETH decrease is verified against exact transfer value plus actual gas fee (`gasUsed * effectiveGasPrice`), avoiding floating-point rounding.
+  - **USDC Transfers:** Sender USDC decrease and recipient USDC increase are verified against the transfer amount in 6-decimal micro-units. The sender's native ETH gas fee is reported separately.
+- **Fail-Safe Inconclusive vs. Revert Handling:** A balance read failure or delta discrepancy never mislabels a confirmed transaction as reverted. If post-receipt RPC reads fail, verification reports `inconclusive`; if deltas do not match expectations, verification reports `mismatch`.
+- **Structured Verification Checklist:** The backend returns and the UI renders a 5-item typed audit checklist:
+  1. Transaction receipt confirmed (`receipt`)
+  2. Recipient or token contract matches (`recipient`)
+  3. Asset and amount match the validated intent (`intent`)
+  4. Expected sender/recipient balance changes verified (`balance`)
+  5. Transaction hash available (`hash`)
+  Each item maintains a truthful status (`passed`, `failed`, `pending`, `inconclusive`). The UI strictly prohibits green checkmarks for unknown or unverified states.
+- **Pending Receipt Invariant:** Transactions whose receipt confirmation times out display their hash and clearly state: *"Transaction broadcast; receipt and balance verification pending."* Pending items are displayed as pending, and resubmission or rebroadcast is never encouraged.

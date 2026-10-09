@@ -411,7 +411,9 @@ app.post('/api/execute', executeLimiter, async (req, res) => {
         success: false,
         pending: true,
         hash: execResult.hash,
-        message: execResult.message
+        message: execResult.message,
+        checklist: execResult.checklist,
+        balanceVerification: execResult.balanceVerification
       });
     }
 
@@ -419,7 +421,9 @@ app.post('/api/execute', executeLimiter, async (req, res) => {
       success: true,
       pending: false,
       hash: execResult.hash,
-      message: execResult.message
+      message: execResult.message,
+      checklist: execResult.checklist,
+      balanceVerification: execResult.balanceVerification
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
