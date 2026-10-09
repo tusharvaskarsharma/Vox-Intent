@@ -1,3 +1,4 @@
+import './test-setup';
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { extractIntent, deps } from './extractor';
@@ -130,5 +131,80 @@ describe('Intent Extractor', () => {
                 return true;
             }
         );
+    });
+
+    it('should reject incomplete Gemini extraction missing amount and invoke fallback safely', async () => {
+        // Gemini returns send_eth without an amount field
+        deps.generateFn = async () => JSON.stringify({
+            action: 'send_eth',
+            confidence: 0.99,
+            recipient: 'Rahul'
+            // amount missing
+        });
+
+        // The fallback should parse the text cleanly
+        const intent = await extractIntent("Send 0.05 ETH to Rahul");
+        assert.strictEqual(intent.action, 'send_eth');
+        assert.strictEqual(intent.amount, '0.05');
+        assert.strictEqual(intent.recipient, 'Rahul');
+    });
+
+    it('should reject incomplete Gemini extraction missing recipient and fail closed if ambiguous', async () => {
+        // Gemini returns send_eth without recipient
+        deps.generateFn = async () => JSON.stringify({
+            action: 'send_eth',
+            confidence: 0.95,
+            amount: '0.05'
+            // recipient missing
+        });
+
+        // Ambiguous text without clear recipient fails closed
+        await assert.rejects(
+            async () => await extractIntent("Send 0.05 ETH please"),
+            /Failed to extract intent/
+        );
+    });
+
+    it('should reject malformed Gemini extraction with numeric amount instead of string', async () => {
+        deps.generateFn = async () => JSON.stringify({
+            action: 'send_usdc',
+            confidence: 0.95,
+            amount: 50, // number, not string
+            recipient: 'Alice'
+        });
+
+        // Fallback correctly parses valid decimal string from text
+        const intent = await extractIntent("Send 50 USDC to Alice");
+        assert.strictEqual(intent.action, 'send_usdc');
+        assert.strictEqual(intent.amount, '50');
+        assert.strictEqual(typeof intent.amount, 'string');
+    });
+
+    it('should reject unsupported action from Gemini and fail closed', async () => {
+        deps.generateFn = async () => JSON.stringify({
+            action: 'swap',
+            confidence: 0.95,
+            amount: '1',
+            recipient: 'Uniswap'
+        });
+
+        await assert.rejects(
+            async () => await extractIntent("Swap 1 ETH on Uniswap"),
+            /Failed to extract intent/
+        );
+    });
+
+    it('should reject out-of-range confidence from Gemini', async () => {
+        deps.generateFn = async () => JSON.stringify({
+            action: 'send_eth',
+            confidence: 1.5, // invalid confidence > 1
+            amount: '0.01',
+            recipient: 'Alice'
+        });
+
+        // Should drop to fallback and recover valid confidence
+        const intent = await extractIntent("Send 0.01 ETH to Alice");
+        assert.strictEqual(intent.action, 'send_eth');
+        assert.strictEqual(intent.confidence, 1.0);
     });
 });

@@ -1,3 +1,4 @@
+import './test-setup';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { parseFallbackIntent } from './fallback';

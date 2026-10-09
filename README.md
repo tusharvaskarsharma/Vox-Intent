@@ -46,24 +46,27 @@ Copy the sample environment file and configure your API keys.
 # In the root directory
 cp .env.example .env
 ```
-Edit `.env` to include your real keys:
+Edit `.env` to include your configuration:
 ```env
-# Server
+# Server Binding
 PORT=3000
 FRONTEND_URL=http://localhost:5173
 
-# AI Extraction
+# AI Extraction (Google Gemini)
 GEMINI_API_KEY=your_gemini_api_key_here
 
-# Blockchain Interaction
+# Blockchain Interaction (Ethereum Sepolia Testnet Only)
 SEPOLIA_RPC_URL=https://rpc2.sepolia.org
 SEPOLIA_PRIVATE_KEY=0x_your_private_key_here
 
-# Address Book Seeds (JSON Map of Name -> Address)
-ADDRESS_BOOK={"Rahul":"0x1D9f6830b29773733411736db3883cBA9a5f93AC"}
+# Official Circle Ethereum Sepolia USDC Contract Address
+SEPOLIA_USDC_CONTRACT_ADDRESS=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238
+
+# Address Book Seeds (JSON Map of Contact Name -> Ethereum Address)
+ADDRESS_BOOK={"Rahul":"0x1D9f6830b29773733411736db3883cBA9a5f93AC","Alice":"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"}
 ```
 
-### 3. Running the App locally
+### 3. Running the App Locally
 
 Start the backend server:
 ```bash
@@ -80,7 +83,9 @@ npm run dev
 Open your browser to [http://localhost:5173](http://localhost:5173).
 
 ## Testing
-The backend is fortified by a robust suite of unit and integration tests verifying the LLM extraction, firewall security, simulation, and execution paths.
+The backend is fortified by a robust suite of 156+ unit and integration tests verifying LLM extraction, deterministic fallback parsing, firewall rules, token concurrency, simulation, plan card data, mismatch detection, and execution paths.
+
+The test suite is **fully self-contained**: it automatically uses ephemeral test keys and mocks, never requiring a real funded wallet or reading live user secrets from `.env`.
 
 To run the test suite:
 ```bash
@@ -88,12 +93,28 @@ cd backend
 npm test
 ```
 
-## Security & Risk Model
-This system assumes the LLM could hallucinate or be subjected to prompt injection. As such, the LLM **cannot** sign transactions.
-1. The user provides a text prompt.
-2. The LLM returns a structured JSON payload representing the intent.
-3. The Backend constructs an unsigned transaction and simulates it against a live EVM node.
-4. The **Intent Firewall** assesses the simulation output against the user's initial intent.
-5. A single-use approval token is generated and handed back to the Frontend.
-6. The user manually verifies the simulated preview in the UI and clicks "Confirm".
-7. The Execution API validates the approval token, reconstructs the transaction from scratch, and signs it locally using `viem`.
+## Security & Architecture Specifications
+
+### 1. Testnet-Only Scope & Startup Assertions
+- **Chain ID Assertion:** On startup and before every transaction simulation and execution, the backend queries the RPC and asserts that the chain ID is strictly `11155111` (Ethereum Sepolia). It fails closed immediately if connected to any other chain.
+- **USDC Contract Verification:** The backend strictly asserts that `SEPOLIA_USDC_CONTRACT_ADDRESS` matches Circle's verified official Sepolia contract address: `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`. If missing, malformed, or mismatched, backend startup fails closed.
+
+### 2. Safe Local Server Binding
+- **127.0.0.1 Local Binding:** The local prototype server explicitly binds to `127.0.0.1` (localhost) rather than `0.0.0.0` to prevent exposure across the local network interface. The port remains configurable via `PORT`.
+- **Remote Deployment Requirements:** Any remote, multi-user, or public deployment requires transport layer security (HTTPS/TLS), an authentication layer, and session-bound approval tokens to prevent unauthorized transaction execution.
+
+### 3. Approval Token Lifecycle & Single-Process Scope
+- **Cryptographic Binding:** Approval tokens are cryptographically random UUIDs generated only after simulation succeeds and the firewall issues a `PASS` verdict. Tokens strictly bind `sender`, `recipient`, `asset`, `contractAddress`, `amount`, `amountRaw`, `network`, `estimatedGas` limit, and `maxCostEth`.
+- **Single-Use & Race-Safe:** Tokens expire in 5 minutes and are synchronously claimed and deleted prior to any awaited async operations during `/api/execute`, preventing concurrency double-spend attacks.
+- **Single-Instance Limitation:** In this prototype, approval tokens are stored in an in-memory `Map`. In a horizontally scaled production cluster with multiple server instances, tokens must be backed by a distributed, atomic key-value store (such as Redis with atomic `GETDEL` or Lua scripts) with TTL.
+
+### 4. Zero-Trust LLM Boundary
+- The LLM (Google Gemini) is untrusted and cannot sign or broadcast transactions.
+- All extracted intents are structurally validated into strict schemas (`ExtractedIntent`) before downstream processing.
+- A deterministic regex fallback parser runs if Gemini extraction times out (10s), throws, or returns unusable output, supporting only unambiguous `balance`, `send_eth`, and `send_usdc` actions.
+- The **Intent Firewall** revalidates balance limits, gas limits, and recipient addresses before and during execution, permanently rejecting `WARN` and `BLOCK` verdicts.
+
+### 5. UI Review & Execution Plan Architecture (Phase B)
+- **Plan Card:** Distinctly separates **Confirmed Execution Facts** (Action, Asset, Amount, Contact, Resolved On-chain Address, Network) from **Estimated Runtime Parameters** (Estimated Gas Units, Gas Cost ETH, Maximum Total Cost Cap, EVM Simulation Status). For balance queries, presents a read-only wallet view with no confirmation button.
+- **What You Said vs. What Executes Panel:** Displays the verbatim voice-transcribed phrase beside the validated execution parameters, clearly flagging potential verbal asset, amount, or recipient discrepancies. The backend's validated intent remains authoritative at all times.
+- **Voice Modification & Invalidation:** Any revision made by voice dictation or typing immediately invalidates the previous preview and approval token, requiring full reprocessing through the backend before authorization can be unlocked. Stale previews or previous tokens can never be executed.

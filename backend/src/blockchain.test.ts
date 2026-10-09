@@ -1,4 +1,5 @@
-import { describe, it, mock, afterEach } from 'node:test';
+import './test-setup';
+import { describe, it, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import {
   constructUnsignedTransaction,
@@ -10,12 +11,12 @@ import {
 } from './blockchain';
 import { SendIntent } from './intent';
 import { parseEther, parseUnits } from 'viem';
-import { generatePrivateKey } from 'viem/accounts';
-
-// Dynamically generate dummy test key to avoid hardcoded private-key literals in tracked source
-process.env.SEPOLIA_PRIVATE_KEY = process.env.SEPOLIA_PRIVATE_KEY || generatePrivateKey();
 
 describe('Blockchain Module (Local Validation)', () => {
+  beforeEach(() => {
+    mock.method(publicClient, 'getChainId', async () => 11155111);
+  });
+
   afterEach(() => {
     mock.restoreAll();
   });

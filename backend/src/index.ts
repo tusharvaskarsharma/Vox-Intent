@@ -46,16 +46,19 @@ export interface ApprovalTokenData {
 export const approvalTokens = new Map<string, ApprovalTokenData>();
 
 
-// Load environment variables from the root .env file
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+// Only load .env file when NOT running tests, ensuring tests remain self-contained and clean
+if (process.env.NODE_ENV !== 'test') {
+  dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+}
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = Number(process.env.PORT) || 3000;
+const host = '127.0.0.1';
 const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
 
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin || origin === frontendUrl) {
+    if (!origin || origin === frontendUrl || origin === 'http://127.0.0.1:5173' || origin === 'http://localhost:5173') {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
@@ -226,6 +229,7 @@ app.post('/api/process', processLimiter, async (req, res) => {
 
     return res.json({
       intent,
+      resolvedAddress: resolvedAddress || (preview ? preview.recipient : undefined),
       preview: preview || undefined,
       risk,
       approvalToken
@@ -453,8 +457,15 @@ async function startServer() {
     }
   }
 
-  app.listen(port, () => {
-    console.log(`Server is running on port ${port}`);
+  /**
+   * SECURITY ARCHITECTURE NOTICE:
+   * The local prototype server explicitly binds to 127.0.0.1 (localhost) to prevent
+   * unintended exposure across the local area network.
+   * Remote/production deployment requires transport-layer security (HTTPS/TLS),
+   * strict user authentication, and session-bound approval tokens.
+   */
+  app.listen(port, host, () => {
+    console.log(`Server is running on http://${host}:${port}`);
   });
 }
 

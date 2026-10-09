@@ -1,7 +1,35 @@
 import { useState, useEffect, useRef } from 'react';
 import gsap from 'gsap';
-import { Sun, Moon, Mic, Send, Shield, Zap, Info, CheckCircle2, AlertTriangle, XCircle, ExternalLink, ShieldAlert, Wallet } from 'lucide-react';
+import {
+  Sun,
+  Moon,
+  Mic,
+  Send,
+  Shield,
+  Zap,
+  Info,
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
+  ExternalLink,
+  ShieldAlert,
+  Wallet,
+  RefreshCw,
+  Edit3,
+  Lock,
+  Activity,
+  AlertCircle,
+  FileText
+} from 'lucide-react';
 import './index.css';
+import {
+  type Intent,
+  type TransactionPreview,
+  type RiskResult,
+  detectMismatches,
+  isConfirmationAllowed
+} from './intent-comparison';
+
 declare global {
   interface Window {
     SpeechRecognition: any;
@@ -11,42 +39,15 @@ declare global {
 
 type Verdict = 'PASS' | 'WARN' | 'BLOCK';
 
-interface Intent {
-  action: 'balance' | 'send_eth' | 'send_usdc';
-  amount?: string;
-  recipient?: string;
-  confidence: number;
-}
-
 interface WalletBalance {
   walletAddress: string;
   balanceEth: string;
   network: string;
 }
 
-interface TransactionPreview {
-  network: string;
-  asset?: 'ETH' | 'USDC';
-  contractAddress?: string;
-  sender: string;
-  recipient: string;
-  amount?: string;
-  amountRaw?: string;
-  amountEth: string;
-  estimatedGas: string;
-  gasCostEth?: string;
-  totalCostEth: string;
-  simulationStatus: string;
-  failureReason?: string;
-}
-
-interface RiskResult {
-  verdict: Verdict;
-  reasons: string[];
-}
-
 interface ApiResponse {
   intent?: Intent;
+  resolvedAddress?: string;
   balance?: WalletBalance;
   preview?: TransactionPreview;
   risk?: RiskResult;
@@ -62,39 +63,54 @@ interface ExecuteResponse {
   message?: string;
 }
 
-const CONFIDENCE_THRESHOLD = 0.90;
-
 function App() {
   const [isDarkMode, setIsDarkMode] = useState(false);
-  
+
   const [requestText, setRequestText] = useState("");
+  const [lastAnalyzedText, setLastAnalyzedText] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  
+
   const [intent, setIntent] = useState<Intent | null>(null);
   const [walletBalance, setWalletBalance] = useState<WalletBalance | null>(null);
   const [preview, setPreview] = useState<TransactionPreview | null>(null);
   const [risk, setRisk] = useState<RiskResult | null>(null);
   const [approvalToken, setApprovalToken] = useState<string | null>(null);
+  const [isStale, setIsStale] = useState(false);
 
   const [isExecuting, setIsExecuting] = useState(false);
-  const [executionResult, setExecutionResult] = useState<{hash?: string, success?: boolean, pending?: boolean, error?: string, message?: string} | null>(null);
+  const [executionResult, setExecutionResult] = useState<{
+    hash?: string;
+    success?: boolean;
+    pending?: boolean;
+    error?: string;
+    message?: string;
+  } | null>(null);
 
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
 
   const cardsContainerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const simulateIdRef = useRef<number>(0);
 
-  // Invalidate previous approval token, preview, and results when user revises request
+  /**
+   * SECURITY INVARIANT:
+   * Any modification (typing, voice dictation, quick-edit) immediately invalidates
+   * any pending preview and approval token. In-flight requests are also invalidated.
+   * Stale results or previous approval tokens can NEVER be executed.
+   */
   const handleTextChange = (newText: string) => {
     setRequestText(newText);
-    if (approvalToken || preview || intent || risk || walletBalance || executionResult) {
+    simulateIdRef.current++; // Invalidate any in-flight simulation requests immediately
+    if (approvalToken || preview || intent || risk || walletBalance || executionResult || !isStale) {
       setApprovalToken(null);
       setPreview(null);
       setIntent(null);
       setRisk(null);
       setWalletBalance(null);
       setExecutionResult(null);
+      setIsStale(true);
     }
   };
 
@@ -102,7 +118,7 @@ function App() {
   useEffect(() => {
     const savedTheme = localStorage.getItem('theme');
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    
+
     if (savedTheme === 'dark' || (!savedTheme && prefersDark)) {
       document.documentElement.classList.add('dark');
       setIsDarkMode(true);
@@ -134,19 +150,17 @@ function App() {
   useEffect(() => {
     if (cardsContainerRef.current) {
       const cards = cardsContainerRef.current.querySelectorAll('.animate-card');
-      // Only animate elements that haven't been animated yet
       const newCards = Array.from(cards).filter(card => !card.classList.contains('animated'));
-      
+
       if (newCards.length > 0) {
-        gsap.fromTo(newCards, 
-          { opacity: 0, y: 40, rotateX: 15, scale: 0.95 },
-          { 
-            opacity: 1, 
-            y: 0, 
-            rotateX: 0, 
-            scale: 1, 
-            duration: 0.7, 
-            stagger: 0.1, 
+        gsap.fromTo(newCards,
+          { opacity: 0, y: 30, scale: 0.98 },
+          {
+            opacity: 1,
+            y: 0,
+            scale: 1,
+            duration: 0.5,
+            stagger: 0.08,
             ease: 'power3.out',
             onComplete: () => {
               newCards.forEach(c => c.classList.add('animated'));
@@ -155,7 +169,7 @@ function App() {
         );
       }
     }
-  }, [intent, walletBalance, preview, risk, executionResult]);
+  }, [intent, walletBalance, preview, risk, executionResult, isStale]);
 
   const toggleListening = () => {
     if (isListening) {
@@ -167,7 +181,7 @@ function App() {
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setErrorMsg("Your browser does not support the Web Speech API. Please try a different browser like Chrome.");
+      setErrorMsg("Your browser does not support the Web Speech API. Please try a browser like Chrome.");
       return;
     }
 
@@ -225,9 +239,14 @@ function App() {
     }
   };
 
+  /**
+   * Sends the current request to the backend for intent extraction, validation,
+   * EVM simulation, and firewall evaluation.
+   */
   const handleSimulate = async () => {
     if (!requestText.trim()) return;
-    
+
+    const currentSimulateId = ++simulateIdRef.current;
     setIsProcessing(true);
     setErrorMsg(null);
     setIntent(null);
@@ -236,8 +255,10 @@ function App() {
     setRisk(null);
     setApprovalToken(null);
     setExecutionResult(null);
+    setIsStale(false);
+    setLastAnalyzedText(requestText.trim());
 
-    // Reset animated classes for next run
+    // Reset animated classes for clean GSAP transitions
     if (cardsContainerRef.current) {
       const cards = cardsContainerRef.current.querySelectorAll('.animate-card');
       cards.forEach(c => c.classList.remove('animated'));
@@ -247,7 +268,7 @@ function App() {
       const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000'}/api/process`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: requestText })
+        body: JSON.stringify({ text: requestText.trim() })
       });
 
       let data: ApiResponse = {};
@@ -258,24 +279,49 @@ function App() {
         throw new Error('Received invalid non-JSON response from server');
       }
 
+      // If user modified text or started another simulation while in-flight, discard stale response
+      if (currentSimulateId !== simulateIdRef.current) {
+        return;
+      }
+
       if (!response.ok) {
         throw new Error(data.error || 'Failed to process intent');
       }
 
       if (data.intent) setIntent(data.intent);
       if (data.balance) setWalletBalance(data.balance);
-      if (data.preview) setPreview(data.preview);
+      if (data.preview) {
+        // Ensure recipient address is populated
+        const previewWithRecipient = {
+          ...data.preview,
+          recipient: data.preview.recipient || data.resolvedAddress || ''
+        };
+        setPreview(previewWithRecipient);
+      }
       if (data.risk) setRisk(data.risk);
       if (data.approvalToken) setApprovalToken(data.approvalToken);
 
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : String(err));
+      if (currentSimulateId === simulateIdRef.current) {
+        setErrorMsg(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setIsProcessing(false);
+      if (currentSimulateId === simulateIdRef.current) {
+        setIsProcessing(false);
+      }
     }
   };
 
+  /**
+   * Executes the transaction with the backend.
+   * Only permitted when isConfirmationAllowed(...) is true.
+   */
   const handleExecute = async () => {
+    if (!isConfirmationAllowed(intent, preview, risk, approvalToken, isStale)) {
+      setErrorMsg("Confirmation blocked: Invalidation, firewall policy, or simulation check not satisfied.");
+      return;
+    }
+
     setIsExecuting(true);
     try {
       const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000'}/api/execute`, {
@@ -295,7 +341,7 @@ function App() {
         if (!response.ok) throw new Error(`Server error: ${response.status} ${response.statusText}`);
         throw new Error('Received invalid non-JSON response from server');
       }
-      
+
       if (!response.ok) {
         throw new Error(data.error || 'Execution failed');
       }
@@ -305,6 +351,8 @@ function App() {
       } else {
         setExecutionResult({ success: true, hash: data.hash, message: data.message });
       }
+      // Invalidate approval token after use
+      setApprovalToken(null);
     } catch (err) {
       setExecutionResult({ success: false, error: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -312,14 +360,26 @@ function App() {
     }
   };
 
-  const getVerdictIcon = (verdict: Verdict) => {
-    if (verdict === 'PASS') return <CheckCircle2 className="w-10 h-10 text-success" />;
-    if (verdict === 'WARN') return <AlertTriangle className="w-10 h-10 text-warn" />;
-    return <ShieldAlert className="w-10 h-10 text-danger" />;
+  const focusInputForModification = () => {
+    if (inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
   };
 
+  const getVerdictIcon = (verdict: Verdict) => {
+    if (verdict === 'PASS') return <CheckCircle2 className="w-9 h-9 text-success" />;
+    if (verdict === 'WARN') return <AlertTriangle className="w-9 h-9 text-warn" />;
+    return <ShieldAlert className="w-9 h-9 text-danger" />;
+  };
+
+  // Run mismatch detection between transcribed voice input and backend validated intent
+  const comparison = detectMismatches(lastAnalyzedText || requestText, intent, preview);
+
+  const canConfirm = isConfirmationAllowed(intent, preview, risk, approvalToken, isStale);
+
   return (
-    <div className="w-full max-w-4xl mx-auto pb-20 perspective-container">
+    <div className="w-full max-w-4xl mx-auto pb-24 perspective-container px-4 sm:px-6">
       {/* Header */}
       <header className="flex items-center justify-between py-6 mb-8 border-b border-surface-border">
         <div className="flex items-center gap-3">
@@ -328,17 +388,17 @@ function App() {
           </div>
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-text-primary">VoxIntent</h1>
-            <p className="text-xs font-medium text-text-secondary uppercase tracking-wider">Web3 Security Engine</p>
+            <p className="text-xs font-medium text-text-secondary uppercase tracking-wider">Web3 Voice Firewall & Security Engine</p>
           </div>
         </div>
-        
+
         <div className="flex items-center gap-4">
           <div className="px-3 py-1.5 rounded-full bg-accent/10 border border-accent/20 flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-accent animate-pulse"></div>
-            <span className="text-xs font-mono font-medium text-accent">Sepolia Network</span>
+            <span className="text-xs font-mono font-medium text-accent">Sepolia (11155111)</span>
           </div>
-          <button 
-            onClick={toggleTheme} 
+          <button
+            onClick={toggleTheme}
             className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
             aria-label="Toggle theme"
           >
@@ -349,32 +409,41 @@ function App() {
 
       {/* Main Workflow Container */}
       <div className="space-y-6 preserve-3d" ref={cardsContainerRef}>
-        
-        {/* Request Panel */}
-        <section className="glass-card p-6 lg:p-8 animate-card opacity-0">
-          <div className="flex items-center gap-2 mb-4">
-            <Mic className="w-5 h-5 text-accent" />
-            <h2 className="text-lg font-semibold">Natural Language Request</h2>
+
+        {/* Feature 3: Request Panel with Voice Modification & Invalidation */}
+        <section className="glass-card p-6 lg:p-8 animate-card">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Mic className="w-5 h-5 text-accent" />
+              <h2 className="text-lg font-semibold">Voice Request & Dictation</h2>
+            </div>
+            {isStale && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-warn/10 text-warn border border-warn/20 animate-pulse">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                Modified — Revalidation Required
+              </span>
+            )}
           </div>
-          
+
           <div className="relative">
             <div className="flex flex-col sm:flex-row gap-3">
               <div className="relative flex-1">
-                <input 
-                  type="text" 
-                  className="input-field pl-12 h-14 text-lg font-medium shadow-inner"
+                <input
+                  ref={inputRef}
+                  type="text"
+                  className="input-field pl-12 h-14 text-base sm:text-lg font-medium shadow-inner"
                   value={requestText}
                   onChange={(e) => handleTextChange(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleSimulate()}
-                  placeholder="e.g. Send 0.05 ETH to vitalik.eth or Check my balance"
+                  placeholder="e.g. Send 0.05 ETH to Rahul, Send 25 USDC to Alice, or Check my balance"
                   disabled={isProcessing || isExecuting}
                 />
-                <button 
+                <button
                   type="button"
                   onClick={toggleListening}
-                  className={`absolute left-3 top-1/2 -translate-y-1/2 p-1.5 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-accent ${
-                    isListening 
-                      ? 'text-danger bg-danger/10 animate-pulse' 
+                  className={`absolute left-3 top-1/2 -translate-y-1/2 p-2 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-accent ${
+                    isListening
+                      ? 'text-danger bg-danger/10 animate-pulse'
                       : 'text-text-secondary hover:bg-surface-border cursor-pointer'
                   }`}
                   title="Click to dictate (Web Speech API). Wispr Flow works globally."
@@ -384,9 +453,9 @@ function App() {
                   <Mic className={`w-5 h-5 ${isListening ? 'opacity-100' : 'opacity-70'}`} />
                 </button>
               </div>
-              <button 
-                className="btn-primary flex items-center justify-center gap-2 h-14 px-8" 
-                onClick={handleSimulate} 
+              <button
+                className="btn-primary flex items-center justify-center gap-2 h-14 px-8 text-base font-semibold"
+                onClick={handleSimulate}
                 disabled={isProcessing || isExecuting || !requestText.trim()}
               >
                 {isProcessing ? (
@@ -394,13 +463,30 @@ function App() {
                 ) : (
                   <>
                     <Send className="w-5 h-5" />
-                    <span>Analyze</span>
+                    <span>{isStale ? "Re-validate" : "Analyze"}</span>
                   </>
                 )}
               </button>
             </div>
           </div>
-          
+
+          {/* Stale Invalidation Notice */}
+          {isStale && (
+            <div className="mt-3 p-3 rounded-xl bg-accent/5 border border-accent/20 flex items-center justify-between text-xs sm:text-sm text-text-secondary">
+              <span className="flex items-center gap-2">
+                <Info className="w-4 h-4 text-accent shrink-0" />
+                Previous preview and approval token invalidated. Click &ldquo;Re-validate&rdquo; to process the revised request.
+              </span>
+              <button
+                onClick={handleSimulate}
+                disabled={isProcessing || !requestText.trim()}
+                className="font-semibold text-accent hover:underline ml-2 shrink-0 cursor-pointer"
+              >
+                Re-validate Now
+              </button>
+            </div>
+          )}
+
           {errorMsg && (
             <div className="mt-4 p-4 rounded-xl bg-danger/10 border border-danger/20 flex items-start gap-3">
               <XCircle className="w-5 h-5 text-danger shrink-0 mt-0.5" />
@@ -409,55 +495,244 @@ function App() {
           )}
         </section>
 
-        {/* Intent Extraction Panel */}
-        {intent && (
-          <section className="glass-card p-6 animate-card opacity-0">
-            <div className="flex items-center justify-between mb-6">
+        {/* Feature 2: “What you said vs. what executes” Panel */}
+        {intent && !isStale && (
+          <section className="glass-card p-6 animate-card border-accent/20">
+            <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
                 <Info className="w-5 h-5 text-accent" />
-                <h2 className="text-lg font-semibold">Extracted Intent</h2>
+                <h2 className="text-lg font-semibold">What You Said vs. What Executes</h2>
               </div>
-              <div className={`px-3 py-1 rounded-full text-xs font-bold border ${intent.confidence >= CONFIDENCE_THRESHOLD ? 'bg-success/10 border-success/30 text-success' : 'bg-warn/10 border-warn/30 text-warn'}`}>
-                {(intent.confidence * 100).toFixed(0)}% Confidence
+              <div className="flex items-center gap-2">
+                {comparison.hasMismatch ? (
+                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-warn/10 border border-warn/30 text-warn flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    Discrepancy Detected
+                  </span>
+                ) : (
+                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-success/10 border border-success/30 text-success flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Lexical Alignment Match
+                  </span>
+                )}
               </div>
             </div>
-            
-            <div className={`grid grid-cols-1 ${intent.action === 'balance' ? 'md:grid-cols-1' : 'md:grid-cols-3'} gap-4`}>
-              <div className="glass-panel p-4">
-                <div className="text-xs text-text-secondary font-medium mb-1 uppercase tracking-wide">Action</div>
-                <div className="font-mono text-lg font-semibold text-text-primary">
-                  {intent.action.toUpperCase()}
-                  {intent.action === 'balance' && <span className="text-xs font-sans text-text-secondary ml-2 font-normal">(Read-only Query)</span>}
+
+            {/* Mismatch warnings banner */}
+            {comparison.discrepancies.length > 0 && (
+              <div className="mb-4 p-4 rounded-xl bg-warn/10 border border-warn/30 text-warn text-sm">
+                <div className="font-semibold flex items-center gap-2 mb-1">
+                  <AlertCircle className="w-4 h-4" />
+                  Potential Transcription or Parameter Mismatch:
+                </div>
+                <ul className="list-disc list-inside space-y-1 text-xs sm:text-sm pl-2">
+                  {comparison.discrepancies.map((d, i) => (
+                    <li key={i}>{d}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Side-by-Side Comparison Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Left Column: What You Said */}
+              <div className="glass-panel p-4 border-l-4 border-l-accent/70">
+                <div className="text-xs text-text-secondary font-semibold uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <Mic className="w-3.5 h-3.5 text-accent" />
+                  What You Said (Voice Transcription)
+                </div>
+                <blockquote className="font-mono text-sm sm:text-base text-text-primary bg-surface/60 border border-surface-border p-3 rounded-lg mb-3 italic break-words">
+                  &ldquo;{lastAnalyzedText || requestText}&rdquo;
+                </blockquote>
+                <div className="space-y-2 text-xs">
+                  {comparison.comparisons.map((c, idx) => (
+                    <div key={idx} className="flex justify-between items-center py-1 border-b border-surface-border/40">
+                      <span className="text-text-secondary font-medium">{c.field}</span>
+                      <span className="font-mono font-semibold text-text-primary truncate max-w-[180px]">{c.voiceValue}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
-              {intent.action !== 'balance' && (
-                <>
-                  <div className="glass-panel p-4">
-                    <div className="text-xs text-text-secondary font-medium mb-1 uppercase tracking-wide">
-                      {intent.action === 'send_usdc' ? 'Amount (USDC)' : 'Amount (ETH)'}
+
+              {/* Right Column: What Executes */}
+              <div className="glass-panel p-4 border-l-4 border-l-success">
+                <div className="text-xs text-text-secondary font-semibold uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5 text-success" />
+                  What Executes (Backend Validated Intent)
+                </div>
+                <div className="font-mono text-sm sm:text-base text-text-primary bg-surface/60 border border-surface-border p-3 rounded-lg mb-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-accent">{intent.action.toUpperCase()}</span>
+                    <span className="text-xs text-text-secondary">{(intent.confidence * 100).toFixed(0)}% confidence</span>
+                  </div>
+                </div>
+                <div className="space-y-2 text-xs">
+                  {comparison.comparisons.map((c, idx) => (
+                    <div key={idx} className="flex justify-between items-center py-1 border-b border-surface-border/40">
+                      <span className="text-text-secondary font-medium">{c.field}</span>
+                      <span className={`font-mono font-semibold truncate max-w-[180px] ${c.isMatch ? 'text-success' : 'text-warn'}`}>
+                        {c.executedValue}
+                      </span>
                     </div>
-                    <div className="font-mono text-lg font-semibold text-text-primary">{intent.amount}</div>
-                  </div>
-                  <div className="glass-panel p-4">
-                    <div className="text-xs text-text-secondary font-medium mb-1 uppercase tracking-wide">Recipient</div>
-                    <div className="font-mono text-lg font-semibold text-text-primary truncate" title={intent.recipient}>{intent.recipient}</div>
-                  </div>
-                </>
-              )}
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-3 text-center text-xs text-text-secondary italic">
+              Security Notice: Lexical alignment confirms transcription wording only and does not establish execution safety. Transaction safety, balance bounds, and gas limits are determined exclusively by the Intent Firewall and EVM simulation.
             </div>
           </section>
         )}
 
-        {/* Wallet Balance Panel for balance intent */}
-        {walletBalance && (
-          <section className="glass-card p-6 animate-card opacity-0 relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-accent/5 rounded-bl-full pointer-events-none"></div>
-            
-            <div className="flex items-center gap-2 mb-6">
-              <Wallet className="w-5 h-5 text-accent" />
-              <h2 className="text-lg font-semibold">Wallet Balance (Sepolia)</h2>
+        {/* Feature 1: Plan Card (for Send Intent) */}
+        {intent && intent.action !== 'balance' && preview && !isStale && (
+          <section className="glass-card p-6 lg:p-8 animate-card relative overflow-hidden border-accent/30 shadow-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-6">
+              <div className="flex items-center gap-2">
+                <FileText className="w-6 h-6 text-accent" />
+                <div>
+                  <h2 className="text-xl font-bold tracking-tight">Execution Plan</h2>
+                  <p className="text-xs text-text-secondary">Comprehensive review of verified facts and estimated runtime costs</p>
+                </div>
+              </div>
+
+              {/* Quick Voice Modification Trigger */}
+              <button
+                type="button"
+                onClick={focusInputForModification}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-surface border border-surface-border hover:border-accent hover:text-accent transition-colors self-start sm:self-auto cursor-pointer"
+                title="Edit or revise this request"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                <span>Modify Plan</span>
+              </button>
             </div>
-            
+
+            {/* Section A: Confirmed Facts */}
+            <div className="mb-6">
+              <div className="flex items-center gap-2 mb-3">
+                <Lock className="w-4 h-4 text-success" />
+                <h3 className="text-sm font-bold uppercase tracking-wider text-success">Confirmed Execution Facts</h3>
+                <span className="text-xs text-text-secondary">(Immutable on-chain parameters)</span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 glass-panel p-4">
+                <div className="flex justify-between items-center py-1.5 border-b border-surface-border/40">
+                  <span className="text-xs text-text-secondary">Action</span>
+                  <span className="font-mono text-sm font-bold text-text-primary uppercase">{intent.action}</span>
+                </div>
+                <div className="flex justify-between items-center py-1.5 border-b border-surface-border/40">
+                  <span className="text-xs text-text-secondary">Asset</span>
+                  <span className="font-mono text-sm font-bold text-accent">{preview.asset || (intent.action === 'send_usdc' ? 'USDC' : 'ETH')}</span>
+                </div>
+                <div className="flex justify-between items-center py-1.5 border-b border-surface-border/40">
+                  <span className="text-xs text-text-secondary">Transfer Amount</span>
+                  <span className="font-mono text-base font-bold text-text-primary">
+                    {preview.amount || preview.amountEth} {preview.asset || (intent.action === 'send_usdc' ? 'USDC' : 'ETH')}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1.5 border-b border-surface-border/40">
+                  <span className="text-xs text-text-secondary">Network</span>
+                  <span className="font-mono text-sm font-medium text-text-primary">{preview.network} (Chain ID: 11155111)</span>
+                </div>
+                <div className="flex justify-between items-center py-1.5 border-b border-surface-border/40">
+                  <span className="text-xs text-text-secondary">Resolved Contact</span>
+                  <span className="font-mono text-sm font-bold text-text-primary">{intent.recipient}</span>
+                </div>
+                <div className="flex justify-between items-center py-1.5 border-b border-surface-border/40">
+                  <span className="text-xs text-text-secondary">Sender Account</span>
+                  <span className="font-mono text-xs text-text-secondary truncate max-w-[200px]" title={preview.sender}>
+                    {preview.sender || 'Sender account'}
+                  </span>
+                </div>
+
+                <div className="md:col-span-2 flex flex-col sm:flex-row sm:items-center justify-between py-1.5 gap-1">
+                  <span className="text-xs text-text-secondary shrink-0">Recipient Address (Resolved)</span>
+                  <span className="font-mono text-xs font-semibold text-accent bg-accent/10 px-2.5 py-1 rounded-md break-all">
+                    {preview.recipient}
+                  </span>
+                </div>
+
+                {preview.contractAddress && (
+                  <div className="md:col-span-2 flex flex-col sm:flex-row sm:items-center justify-between py-1.5 gap-1 border-t border-surface-border/40 pt-2">
+                    <span className="text-xs text-text-secondary shrink-0">USDC Contract Address</span>
+                    <span className="font-mono text-xs text-text-secondary bg-surface/50 border border-surface-border px-2.5 py-1 rounded-md break-all">
+                      {preview.contractAddress}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Section B: Estimated Runtime Parameters */}
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <Activity className="w-4 h-4 text-accent" />
+                <h3 className="text-sm font-bold uppercase tracking-wider text-accent">Estimated Runtime Parameters</h3>
+                <span className="text-xs text-text-secondary">(Dynamic network estimates; subject to live block conditions)</span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 glass-panel p-4">
+                <div className="p-3 rounded-lg bg-surface/40 border border-surface-border">
+                  <div className="text-xs text-text-secondary font-medium mb-1">Estimated Gas</div>
+                  <div className="font-mono text-base font-bold text-text-primary">
+                    {preview.estimatedGas} <span className="text-xs font-sans text-text-secondary font-normal">units</span>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-lg bg-surface/40 border border-surface-border">
+                  <div className="text-xs text-text-secondary font-medium mb-1">Estimated Gas Cost</div>
+                  <div className="font-mono text-base font-bold text-text-primary">
+                    {preview.gasCostEth || 'unknown'} <span className="text-xs font-sans text-text-secondary font-normal">ETH</span>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-lg bg-surface/40 border border-surface-border">
+                  <div className="text-xs text-text-secondary font-medium mb-1">Max Total Cost (Approved Cap)</div>
+                  <div className="font-mono text-base font-bold text-accent">
+                    {preview.totalCostEth} <span className="text-xs font-sans text-text-secondary font-normal">ETH</span>
+                  </div>
+                </div>
+
+                <div className="md:col-span-3 p-3 rounded-lg bg-surface/40 border border-surface-border flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-text-secondary font-medium">EVM Simulation Status:</span>
+                    <span className={`font-mono text-sm font-bold ${preview.simulationStatus === 'success' ? 'text-success' : 'text-danger'}`}>
+                      {preview.simulationStatus.toUpperCase()}
+                    </span>
+                  </div>
+                  {preview.simulationStatus === 'success' ? (
+                    <span className="text-xs text-success flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Revert simulation passed cleanly
+                    </span>
+                  ) : (
+                    <span className="text-xs text-danger flex items-center gap-1">
+                      <XCircle className="w-3.5 h-3.5" /> {preview.failureReason || 'Simulation reverted'}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* Feature 1 (Part B): Wallet Balance Plan (Read-Only; No Execution) */}
+        {walletBalance && !isStale && (
+          <section className="glass-card p-6 lg:p-8 animate-card border-accent/30 relative overflow-hidden">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Wallet className="w-6 h-6 text-accent" />
+                <div>
+                  <h2 className="text-xl font-bold tracking-tight">Wallet Balance (Sepolia)</h2>
+                  <p className="text-xs text-text-secondary">Read-only balance query. No transaction or approval token is generated.</p>
+                </div>
+              </div>
+              <span className="px-3 py-1 rounded-full text-xs font-bold bg-accent/10 border border-accent/20 text-accent">
+                Read-Only
+              </span>
+            </div>
+
             <div className="glass-panel p-5 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 mb-4">
               <div className="flex justify-between items-center py-2 border-b border-surface-border/50">
                 <span className="text-sm text-text-secondary">Network</span>
@@ -465,103 +740,53 @@ function App() {
               </div>
               <div className="flex justify-between items-center py-2 border-b border-surface-border/50">
                 <span className="text-sm text-text-secondary">Available Balance</span>
-                <span className="font-mono text-base font-bold text-accent">
+                <span className="font-mono text-lg font-bold text-accent">
                   {walletBalance.balanceEth} ETH
                 </span>
               </div>
-              <div className="md:col-span-2 flex flex-col md:flex-row md:justify-between md:items-center py-2 border-surface-border/50 gap-2">
+              <div className="md:col-span-2 flex flex-col md:flex-row md:justify-between md:items-center py-2 gap-2">
                 <span className="text-sm text-text-secondary shrink-0">Account Address</span>
-                <span className="font-mono text-sm text-text-primary bg-surface/50 border border-surface-border px-3 py-1 rounded-lg break-all">
+                <span className="font-mono text-sm text-text-primary bg-surface/50 border border-surface-border px-3 py-1.5 rounded-lg break-all">
                   {walletBalance.walletAddress}
                 </span>
               </div>
             </div>
-          </section>
-        )}
 
-        {/* Transaction Preview Panel */}
-        {preview && (
-          <section className="glass-card p-6 animate-card opacity-0 relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-accent/5 rounded-bl-full pointer-events-none"></div>
-            
-            <div className="flex items-center gap-2 mb-6">
-              <Zap className="w-5 h-5 text-accent" />
-              <h2 className="text-lg font-semibold">Simulation & Routing</h2>
-            </div>
-            
-            <div className="glass-panel p-5 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 mb-4">
-              <div className="flex justify-between items-center py-2 border-b border-surface-border/50">
-                <span className="text-sm text-text-secondary">Network</span>
-                <span className="font-mono text-sm font-medium">{preview.network}</span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-surface-border/50">
-                <span className="text-sm text-text-secondary">Asset</span>
-                <span className="font-mono text-sm font-bold text-accent">{preview.asset || (intent?.action === 'send_usdc' ? 'USDC' : 'ETH')}</span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-surface-border/50">
-                <span className="text-sm text-text-secondary">Transfer Amount</span>
-                <span className="font-mono text-sm font-medium">
-                  {preview.amount || preview.amountEth} {preview.asset || (intent?.action === 'send_usdc' ? 'USDC' : 'ETH')}
-                </span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-surface-border/50">
-                <span className="text-sm text-text-secondary">Simulation Status</span>
-                <span className={`font-mono text-sm font-bold ${preview.simulationStatus === 'success' ? 'text-success' : 'text-danger'}`}>
-                  {preview.simulationStatus.toUpperCase()}
-                </span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-surface-border/50">
-                <span className="text-sm text-text-secondary">
-                  {preview.asset === 'USDC' ? 'Gas Cost (ETH)' : 'Total Cost (ETH)'}
-                </span>
-                <span className="font-mono text-sm font-medium">{preview.gasCostEth || preview.totalCostEth} ETH</span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-surface-border/50">
-                <span className="text-sm text-text-secondary">Estimated Gas</span>
-                <span className="font-mono text-sm font-medium">{preview.estimatedGas}</span>
-              </div>
-              {preview.contractAddress && (
-                <div className="md:col-span-2 flex flex-col md:flex-row md:justify-between md:items-center py-2 border-b border-surface-border/50 gap-2">
-                  <span className="text-sm text-text-secondary shrink-0">USDC Contract</span>
-                  <span className="font-mono text-xs text-text-secondary bg-surface/50 border border-surface-border px-3 py-1 rounded-lg break-all">
-                    {preview.contractAddress}
-                  </span>
-                </div>
-              )}
-              <div className="md:col-span-2 flex flex-col md:flex-row md:justify-between md:items-center py-2 border-surface-border/50 gap-2">
-                <span className="text-sm text-text-secondary shrink-0">Resolved Address</span>
-                <span className="font-mono text-sm text-accent bg-accent/10 px-3 py-1 rounded-lg break-all">
-                  {preview.recipient}
-                </span>
-              </div>
+            <div className="p-3 rounded-xl bg-accent/5 border border-accent/20 text-center text-xs text-text-secondary">
+              🔒 Read-Only Query Security Invariant: Balance queries do not construct or sign transactions.
             </div>
           </section>
         )}
 
-        {/* Intent Firewall Panel */}
-        {risk && (
-          <section className="glass-card p-6 animate-card opacity-0">
-            <div className="flex items-center gap-2 mb-6">
+        {/* Security Firewall Verdict Panel */}
+        {risk && !isStale && (
+          <section className="glass-card p-6 animate-card">
+            <div className="flex items-center gap-2 mb-4">
               <Shield className="w-5 h-5 text-accent" />
-              <h2 className="text-lg font-semibold">Security Firewall</h2>
+              <h2 className="text-lg font-semibold">Security Firewall Verdict</h2>
             </div>
-            
+
             <div className={`rounded-xl border p-5 flex flex-col sm:flex-row gap-5 items-start sm:items-center shadow-inner ${
-              risk.verdict === 'PASS' ? 'verdict-pass' : 
+              risk.verdict === 'PASS' ? 'verdict-pass' :
               risk.verdict === 'WARN' ? 'verdict-warn' : 'verdict-block'
             }`}>
               <div className="shrink-0">
                 {getVerdictIcon(risk.verdict)}
               </div>
-              
+
               <div className="flex-1">
-                <h3 className="text-xl font-bold mb-1 tracking-tight">{risk.verdict}</h3>
-                <div className="text-sm opacity-90 font-medium">
-                  {risk.verdict === 'PASS' 
-                    ? 'All security constraints satisfied. Safe to execute.' 
-                    : 'Transaction flagged by security policies:'}
+                <div className="flex items-center gap-2 mb-1">
+                  <h3 className="text-xl font-bold tracking-tight">{risk.verdict}</h3>
+                  <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-surface/40">
+                    {risk.verdict === 'PASS' ? 'Safe to Authorize' : risk.verdict === 'WARN' ? 'Execution Blocked: Warning' : 'Execution Blocked: Policy Violation'}
+                  </span>
                 </div>
-                
+                <div className="text-sm opacity-90 font-medium">
+                  {risk.verdict === 'PASS'
+                    ? 'All security constraints and balance bounds satisfied.'
+                    : 'The deterministic firewall flagged this transaction:'}
+                </div>
+
                 {risk.reasons.length > 0 && (
                   <ul className="mt-3 space-y-1.5">
                     {risk.reasons.map((reason, idx) => (
@@ -577,25 +802,38 @@ function App() {
           </section>
         )}
 
-        {/* Authorization Panel */}
-        {risk && risk.verdict === 'PASS' && !executionResult && intent && preview && (
-          <section className="glass-card p-6 border-accent/40 animate-card opacity-0 shadow-[0_0_30px_rgba(59,130,246,0.15)] relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-success via-accent to-success"></div>
-            
-            <h2 className="text-lg font-semibold mb-2">Transaction Authorization</h2>
-            <p className="text-sm text-text-secondary mb-6">
-              Review details carefully. This action is irreversible on the Sepolia testnet.
-            </p>
-            
-            <button 
-              className="w-full bg-success hover:bg-success/90 text-white shadow-lg shadow-success/30 hover:shadow-success/40 py-4 rounded-xl font-bold text-lg transition-all duration-300 hover:-translate-y-1 active:translate-y-0 disabled:opacity-50 disabled:pointer-events-none flex items-center justify-center gap-3"
+        {/* Transaction Authorization Panel */}
+        {canConfirm && !executionResult && intent && preview && (
+          <section className="glass-card p-6 border-accent/40 animate-card shadow-[0_0_30px_rgba(59,130,246,0.15)] relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-success via-accent to-success"></div>
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+              <div>
+                <h2 className="text-lg font-bold">Transaction Authorization</h2>
+                <p className="text-sm text-text-secondary">
+                  Review the plan above carefully. This action will sign and broadcast a live transaction to Sepolia.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={focusInputForModification}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-text-secondary hover:text-accent transition-colors self-start sm:self-auto cursor-pointer"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                <span>Need to change anything?</span>
+              </button>
+            </div>
+
+            <button
+              className="w-full bg-success hover:bg-success/90 text-white shadow-lg shadow-success/30 hover:shadow-success/40 py-4 rounded-xl font-bold text-lg transition-all duration-300 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:pointer-events-none flex items-center justify-center gap-3 cursor-pointer"
               onClick={handleExecute}
               disabled={isExecuting}
             >
               {isExecuting ? (
                 <>
                   <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                  <span>Executing on Sepolia...</span>
+                  <span>Signing & Broadcasting on Sepolia...</span>
                 </>
               ) : (
                 <>
@@ -611,9 +849,9 @@ function App() {
 
         {/* Execution Result Panel */}
         {executionResult && (
-          <section className="glass-card p-6 animate-card opacity-0">
+          <section className="glass-card p-6 animate-card">
             <h2 className="text-lg font-semibold mb-4">Execution Status</h2>
-            
+
             {executionResult.pending ? (
               <div className="bg-warn/10 border border-warn/30 rounded-xl p-6 text-center">
                 <div className="w-16 h-16 bg-warn/20 text-warn rounded-full flex items-center justify-center mx-auto mb-4">
@@ -623,11 +861,11 @@ function App() {
                 <p className="text-text-secondary text-sm mb-4">
                   {executionResult.message || 'Transaction was broadcasted, but confirmation timed out on Sepolia. Do not re-submit.'}
                 </p>
-                
+
                 {executionResult.hash && (
-                  <a 
-                    href={`https://sepolia.etherscan.io/tx/${executionResult.hash}`} 
-                    target="_blank" 
+                  <a
+                    href={`https://sepolia.etherscan.io/tx/${executionResult.hash}`}
+                    target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center gap-2 px-4 py-2 bg-surface border border-surface-border rounded-lg text-accent hover:bg-accent/10 transition-colors font-mono text-sm break-all"
                   >
@@ -643,16 +881,18 @@ function App() {
                 </div>
                 <h3 className="text-xl font-bold text-success mb-2">Transaction Successful</h3>
                 <p className="text-text-secondary text-sm mb-4">Your intent has been executed on the Sepolia network.</p>
-                
-                <a 
-                  href={`https://sepolia.etherscan.io/tx/${executionResult.hash}`} 
-                  target="_blank" 
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-surface border border-surface-border rounded-lg text-accent hover:bg-accent/10 transition-colors font-mono text-sm break-all"
-                >
-                  <ExternalLink className="w-4 h-4 shrink-0" />
-                  <span className="truncate max-w-[200px] sm:max-w-md">{executionResult.hash}</span>
-                </a>
+
+                {executionResult.hash && (
+                  <a
+                    href={`https://sepolia.etherscan.io/tx/${executionResult.hash}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-surface border border-surface-border rounded-lg text-accent hover:bg-accent/10 transition-colors font-mono text-sm break-all"
+                  >
+                    <ExternalLink className="w-4 h-4 shrink-0" />
+                    <span className="truncate max-w-[200px] sm:max-w-md">{executionResult.hash}</span>
+                  </a>
+                )}
               </div>
             ) : (
               <div className="bg-danger/10 border border-danger/30 rounded-xl p-6 text-center">

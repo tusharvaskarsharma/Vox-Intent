@@ -5,9 +5,11 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { sepolia } from 'viem/chains';
 import { SendIntent } from './intent';
 
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+if (process.env.NODE_ENV !== 'test') {
+  dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+}
 
-const rpcUrl = process.env.SEPOLIA_RPC_URL;
+const rpcUrl = process.env.SEPOLIA_RPC_URL || 'https://rpc2.sepolia.org';
 
 export const publicClient = createPublicClient({
   chain: sepolia,

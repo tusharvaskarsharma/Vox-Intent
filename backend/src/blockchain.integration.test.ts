@@ -1,13 +1,8 @@
+import './test-setup';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { SendIntent } from './intent';
 import { parseEther } from 'viem';
-import dotenv from 'dotenv';
-import path from 'path';
-
-// Load real env vars (which sets SEPOLIA_RPC_URL)
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
-
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 
 // Dynamically generate an empty wallet for testing insufficient balance, avoiding hardcoded key literals
@@ -15,7 +10,9 @@ const dummyTestPrivateKey = generatePrivateKey();
 process.env.SEPOLIA_PRIVATE_KEY = dummyTestPrivateKey;
 const dummyTestAccount = privateKeyToAccount(dummyTestPrivateKey);
 
-describe('Blockchain Module (Integration - Requires Live RPC)', () => {
+describe('Blockchain Module (Integration - Requires Live RPC)', {
+  skip: !process.env.RUN_LIVE_RPC_TESTS ? 'Live RPC integration test skipped: set RUN_LIVE_RPC_TESTS=true to enable' : false
+}, () => {
   it('should hit the real Sepolia RPC and report insufficient balance for empty wallet', { timeout: 30000 }, async () => {
     // Dynamically import blockchain AFTER env vars are established
     const { constructUnsignedTransaction } = await import('./blockchain');

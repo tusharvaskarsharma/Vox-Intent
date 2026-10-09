@@ -1,4 +1,4 @@
-process.env.NODE_ENV = 'test';
+import './test-setup';
 import { describe, it, before, after, afterEach, mock } from 'node:test';
 import assert from 'node:assert';
 import { app, approvalTokens } from './index';
@@ -19,9 +19,9 @@ describe('API Execution Endpoint', () => {
     await collection.insertOne({ name: 'Rahul', walletAddress: '0x1D9f6830b29773733411736db3883cBA9a5f93AC' });
 
     return new Promise((resolve) => {
-      server = app.listen(0, () => {
+      server = app.listen(0, '127.0.0.1', () => {
         const port = server.address().port;
-        baseUrl = `http://localhost:${port}`;
+        baseUrl = `http://127.0.0.1:${port}`;
         resolve(undefined);
       });
     });
@@ -79,9 +79,9 @@ describe('API Process Endpoint - Natural Language', () => {
     await collection.insertOne({ name: 'Rahul', walletAddress: '0x1D9f6830b29773733411736db3883cBA9a5f93AC' });
 
     return new Promise((resolve) => {
-      server = app.listen(0, () => {
+      server = app.listen(0, '127.0.0.1', () => {
         const port = server.address().port;
-        baseUrl = `http://localhost:${port}`;
+        baseUrl = `http://127.0.0.1:${port}`;
         resolve(undefined);
       });
     });
@@ -102,6 +102,7 @@ describe('API Process Endpoint - Natural Language', () => {
     mock.method(publicClient, 'getBalance', async () => parseEther('10'));
     mock.method(publicClient, 'estimateGas', async () => 21000n);
     mock.method(publicClient, 'getGasPrice', async () => 0n);
+    mock.method(publicClient, 'getChainId', async () => 11155111);
 
     // Mock the LLM to deterministically return a SendIntent
     deps.generateFn = async () => JSON.stringify({
@@ -167,7 +168,9 @@ describe('API Process Endpoint - Natural Language', () => {
   it('should reject ambiguous natural language requests', async () => {
     deps.generateFn = async () => JSON.stringify({
         action: 'send_eth',
-        confidence: 0.2
+        confidence: 0.2,
+        amount: '1',
+        recipient: 'Rahul'
     });
 
     const res = await fetch(`${baseUrl}/api/process`, {
@@ -222,6 +225,7 @@ describe('API Process Endpoint - Natural Language', () => {
     mock.method(publicClient, 'getBalance', async () => parseEther('10'));
     mock.method(publicClient, 'estimateGas', async () => 21000n);
     mock.method(publicClient, 'getGasPrice', async () => 0n);
+    mock.method(publicClient, 'getChainId', async () => 11155111);
 
     // Simulate Gemini API offline / throwing error
     deps.generateFn = async () => {
@@ -255,6 +259,7 @@ describe('API Process Endpoint - Natural Language', () => {
     mock.method(publicClient, 'getBalance', async () => parseEther('1')); // 1 ETH for gas
     mock.method(publicClient, 'estimateGas', async () => 65000n);
     mock.method(publicClient, 'getGasPrice', async () => 1000000000n);
+    mock.method(publicClient, 'getChainId', async () => 11155111);
     mock.method(publicClient, 'readContract', async ({ functionName }: any) => {
       if (functionName === 'decimals') return 6;
       if (functionName === 'balanceOf') return parseUnits('100', 6);
@@ -383,9 +388,9 @@ describe('API Process Endpoint - Natural Language', () => {
 describe('CORS Restrictions', () => {
   before(async () => {
     return new Promise((resolve) => {
-      server = app.listen(0, () => {
+      server = app.listen(0, '127.0.0.1', () => {
         const port = server.address().port;
-        baseUrl = `http://localhost:${port}`;
+        baseUrl = `http://127.0.0.1:${port}`;
         resolve(undefined);
       });
     });
@@ -425,9 +430,9 @@ describe('API Execute Endpoint - Approval Tokens', () => {
     await collection.insertOne({ name: 'Rahul', walletAddress: '0x1D9f6830b29773733411736db3883cBA9a5f93AC' });
 
     return new Promise((resolve) => {
-      server = app.listen(0, () => {
+      server = app.listen(0, '127.0.0.1', () => {
         const port = server.address().port;
-        baseUrl = `http://localhost:${port}`;
+        baseUrl = `http://127.0.0.1:${port}`;
         resolve(undefined);
       });
     });
@@ -584,6 +589,7 @@ describe('API Execute Endpoint - Approval Tokens', () => {
 
     const { publicClient } = require('./blockchain');
     const { parseEther } = require('viem');
+    mock.method(publicClient, 'getChainId', async () => 11155111);
     mock.method(publicClient, 'getBalance', async () => parseEther('10'));
     mock.method(publicClient, 'estimateGas', async () => 21000n);
     mock.method(publicClient, 'getGasPrice', async () => 0n);
