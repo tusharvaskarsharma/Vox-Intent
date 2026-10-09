@@ -10,7 +10,7 @@ describe('VoxIntent Intent Firewall', () => {
     maxBalancePercentageThreshold: 0.5 // 50%
   };
 
-  const validIntent: SendIntent = { action: 'send', amount: 1, confidence: 0.95, recipient: 'Rahul' };
+  const validIntent: SendIntent = { action: 'send_eth', amount: '1', confidence: 0.95, recipient: 'Rahul' };
   const validResolved = '0x1D9f6830b29773733411736db3883cBA9a5f93AC';
   const validPreview: TransactionPreview = {
     network: 'sepolia',
@@ -64,8 +64,15 @@ describe('VoxIntent Intent Firewall', () => {
     assert.ok(result.reasons.includes('Total cost (amount + gas) exceeds available balance'));
   });
 
-  it('should BLOCK if action is not send', () => {
-    const invalidIntent: any = { action: 'balance', confidence: 0.95 };
+  it('should PASS for read-only balance action when confidence is sufficient', () => {
+    const balanceIntent = { action: 'balance' as const, confidence: 0.95 };
+    const result = evaluateRisk(balanceIntent, undefined, undefined, validBalance, config);
+    assert.strictEqual(result.verdict, 'PASS');
+    assert.strictEqual(result.reasons.length, 0);
+  });
+
+  it('should BLOCK if action is unsupported (e.g. swap or stake)', () => {
+    const invalidIntent: any = { action: 'swap', confidence: 0.95 };
     const result = evaluateRisk(invalidIntent, undefined, undefined, validBalance, config);
     assert.strictEqual(result.verdict, 'BLOCK');
     assert.ok(result.reasons.includes('Unsupported action'));
@@ -94,5 +101,87 @@ describe('VoxIntent Intent Firewall', () => {
     assert.strictEqual(result.verdict, 'BLOCK');
     assert.ok(result.reasons.includes('Simulation failed'));
     assert.ok(result.reasons.includes('Amount exceeds configurable percentage of the wallet balance'));
+  });
+});
+
+import { CIRCLE_SEPOLIA_USDC_ADDRESS } from './blockchain';
+
+describe('USDC Intent Firewall Evaluation', () => {
+  const config: FirewallConfig = {
+    confidenceThreshold: 0.9,
+    maxBalancePercentageThreshold: 0.5 // 50%
+  };
+
+  const validResolved = '0x1D9f6830b29773733411736db3883cBA9a5f93AC';
+  const usdcIntent: SendIntent = { action: 'send_usdc', amount: '25', confidence: 0.95, recipient: 'Rahul' };
+  const validUsdcPreview: TransactionPreview = {
+    network: 'sepolia',
+    asset: 'USDC',
+    contractAddress: CIRCLE_SEPOLIA_USDC_ADDRESS,
+    sender: '0xsender',
+    recipient: validResolved,
+    amount: '25',
+    amountRaw: '25000000',
+    amountEth: '0',
+    estimatedGas: '65000',
+    gasCostEth: '0.0001',
+    totalCostEth: '0.0001',
+    simulationStatus: 'success'
+  };
+
+  it('should PASS when valid USDC conditions are met', () => {
+    const result = evaluateRisk(usdcIntent, validResolved, validUsdcPreview, '1.0', config, '100');
+    assert.strictEqual(result.verdict, 'PASS');
+    assert.strictEqual(result.reasons.length, 0);
+  });
+
+  it('should BLOCK if USDC contract address is invalid or unverified', () => {
+    const preview: TransactionPreview = {
+      ...validUsdcPreview,
+      contractAddress: '0x0000000000000000000000000000000000000001'
+    };
+    const result = evaluateRisk(usdcIntent, validResolved, preview, '1.0', config, '100');
+    assert.strictEqual(result.verdict, 'BLOCK');
+    assert.ok(result.reasons.includes('Invalid or unverified token contract address'));
+  });
+
+  it('should BLOCK if USDC amount exceeds available USDC balance', () => {
+    const result = evaluateRisk(usdcIntent, validResolved, validUsdcPreview, '1.0', config, '20'); // Has 20, needs 25
+    assert.strictEqual(result.verdict, 'BLOCK');
+    assert.ok(result.reasons.includes('Requested USDC amount exceeds available USDC balance'));
+  });
+
+  it('should BLOCK if native ETH balance cannot cover gas for USDC transfer', () => {
+    const result = evaluateRisk(usdcIntent, validResolved, validUsdcPreview, '0.00005', config, '100'); // Gas is 0.0001, has 0.00005
+    assert.strictEqual(result.verdict, 'BLOCK');
+    assert.ok(result.reasons.includes('Gas cost exceeds available ETH balance'));
+  });
+
+  it('should WARN if USDC amount exceeds configurable percentage of USDC balance', () => {
+    // Amount = 25, Balance = 40. 25 > 0.5 * 40 = 20
+    const result = evaluateRisk(usdcIntent, validResolved, validUsdcPreview, '1.0', config, '40');
+    assert.strictEqual(result.verdict, 'WARN');
+    assert.ok(result.reasons.includes('USDC amount exceeds configurable percentage of the USDC balance'));
+  });
+
+  it('should BLOCK if USDC raw amount does not match expected 6 decimals', () => {
+    const preview: TransactionPreview = {
+      ...validUsdcPreview,
+      amountRaw: '25000001' // Mismatched raw units!
+    };
+    const result = evaluateRisk(usdcIntent, validResolved, preview, '1.0', config, '100');
+    assert.strictEqual(result.verdict, 'BLOCK');
+    assert.ok(result.reasons.includes('Transaction raw amount does not match intended amount'));
+  });
+
+  it('should BLOCK if USDC simulation failed', () => {
+    const preview: TransactionPreview = {
+      ...validUsdcPreview,
+      simulationStatus: 'failed',
+      failureReason: 'Execution reverted'
+    };
+    const result = evaluateRisk(usdcIntent, validResolved, preview, '1.0', config, '100');
+    assert.strictEqual(result.verdict, 'BLOCK');
+    assert.ok(result.reasons.includes('Simulation failed'));
   });
 });

@@ -18,5 +18,6 @@ export async function generateContentWithSchema(prompt: string, schema: any): Pr
         }
     });
 
-    return response.text;
+    const text = response.text;
+    return (typeof text === 'string' && text.trim().length > 0) ? text.trim() : null;
 }

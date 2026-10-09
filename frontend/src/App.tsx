@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import gsap from 'gsap';
-import { Sun, Moon, Mic, Send, Shield, Zap, Info, CheckCircle2, AlertTriangle, XCircle, ExternalLink, ShieldAlert } from 'lucide-react';
+import { Sun, Moon, Mic, Send, Shield, Zap, Info, CheckCircle2, AlertTriangle, XCircle, ExternalLink, ShieldAlert, Wallet } from 'lucide-react';
 import './index.css';
 declare global {
   interface Window {
@@ -12,18 +12,29 @@ declare global {
 type Verdict = 'PASS' | 'WARN' | 'BLOCK';
 
 interface Intent {
-  action: string;
-  amount: number;
-  recipient: string;
+  action: 'balance' | 'send_eth' | 'send_usdc';
+  amount?: string;
+  recipient?: string;
   confidence: number;
+}
+
+interface WalletBalance {
+  walletAddress: string;
+  balanceEth: string;
+  network: string;
 }
 
 interface TransactionPreview {
   network: string;
+  asset?: 'ETH' | 'USDC';
+  contractAddress?: string;
   sender: string;
   recipient: string;
+  amount?: string;
+  amountRaw?: string;
   amountEth: string;
   estimatedGas: string;
+  gasCostEth?: string;
   totalCostEth: string;
   simulationStatus: string;
   failureReason?: string;
@@ -36,6 +47,7 @@ interface RiskResult {
 
 interface ApiResponse {
   intent?: Intent;
+  balance?: WalletBalance;
   preview?: TransactionPreview;
   risk?: RiskResult;
   approvalToken?: string;
@@ -44,6 +56,7 @@ interface ApiResponse {
 
 interface ExecuteResponse {
   success?: boolean;
+  pending?: boolean;
   hash?: string;
   error?: string;
   message?: string;
@@ -59,17 +72,31 @@ function App() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
   const [intent, setIntent] = useState<Intent | null>(null);
+  const [walletBalance, setWalletBalance] = useState<WalletBalance | null>(null);
   const [preview, setPreview] = useState<TransactionPreview | null>(null);
   const [risk, setRisk] = useState<RiskResult | null>(null);
   const [approvalToken, setApprovalToken] = useState<string | null>(null);
 
   const [isExecuting, setIsExecuting] = useState(false);
-  const [executionResult, setExecutionResult] = useState<{hash?: string, success?: boolean, error?: string} | null>(null);
+  const [executionResult, setExecutionResult] = useState<{hash?: string, success?: boolean, pending?: boolean, error?: string, message?: string} | null>(null);
 
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
 
   const cardsContainerRef = useRef<HTMLDivElement>(null);
+
+  // Invalidate previous approval token, preview, and results when user revises request
+  const handleTextChange = (newText: string) => {
+    setRequestText(newText);
+    if (approvalToken || preview || intent || risk || walletBalance || executionResult) {
+      setApprovalToken(null);
+      setPreview(null);
+      setIntent(null);
+      setRisk(null);
+      setWalletBalance(null);
+      setExecutionResult(null);
+    }
+  };
 
   // Theme initialization
   useEffect(() => {
@@ -128,7 +155,7 @@ function App() {
         );
       }
     }
-  }, [intent, preview, risk, executionResult]);
+  }, [intent, walletBalance, preview, risk, executionResult]);
 
   const toggleListening = () => {
     if (isListening) {
@@ -163,7 +190,11 @@ function App() {
           }
         }
         if (newTranscript) {
-          setRequestText(prev => prev ? prev + ' ' + newTranscript.trim() : newTranscript.trim());
+          setRequestText(prev => {
+            const updated = prev ? prev + ' ' + newTranscript.trim() : newTranscript.trim();
+            handleTextChange(updated);
+            return updated;
+          });
         }
       };
 
@@ -200,6 +231,7 @@ function App() {
     setIsProcessing(true);
     setErrorMsg(null);
     setIntent(null);
+    setWalletBalance(null);
     setPreview(null);
     setRisk(null);
     setApprovalToken(null);
@@ -231,6 +263,7 @@ function App() {
       }
 
       if (data.intent) setIntent(data.intent);
+      if (data.balance) setWalletBalance(data.balance);
       if (data.preview) setPreview(data.preview);
       if (data.risk) setRisk(data.risk);
       if (data.approvalToken) setApprovalToken(data.approvalToken);
@@ -267,7 +300,11 @@ function App() {
         throw new Error(data.error || 'Execution failed');
       }
 
-      setExecutionResult({ success: true, hash: data.hash });
+      if (data.pending) {
+        setExecutionResult({ success: false, pending: true, hash: data.hash, message: data.message });
+      } else {
+        setExecutionResult({ success: true, hash: data.hash, message: data.message });
+      }
     } catch (err) {
       setExecutionResult({ success: false, error: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -327,9 +364,9 @@ function App() {
                   type="text" 
                   className="input-field pl-12 h-14 text-lg font-medium shadow-inner"
                   value={requestText}
-                  onChange={(e) => setRequestText(e.target.value)}
+                  onChange={(e) => handleTextChange(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleSimulate()}
-                  placeholder="e.g. Send 0.05 ETH to vitalik.eth"
+                  placeholder="e.g. Send 0.05 ETH to vitalik.eth or Check my balance"
                   disabled={isProcessing || isExecuting}
                 />
                 <button 
@@ -385,18 +422,58 @@ function App() {
               </div>
             </div>
             
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className={`grid grid-cols-1 ${intent.action === 'balance' ? 'md:grid-cols-1' : 'md:grid-cols-3'} gap-4`}>
               <div className="glass-panel p-4">
                 <div className="text-xs text-text-secondary font-medium mb-1 uppercase tracking-wide">Action</div>
-                <div className="font-mono text-lg font-semibold text-text-primary">{intent.action.toUpperCase()}</div>
+                <div className="font-mono text-lg font-semibold text-text-primary">
+                  {intent.action.toUpperCase()}
+                  {intent.action === 'balance' && <span className="text-xs font-sans text-text-secondary ml-2 font-normal">(Read-only Query)</span>}
+                </div>
               </div>
-              <div className="glass-panel p-4">
-                <div className="text-xs text-text-secondary font-medium mb-1 uppercase tracking-wide">Amount (ETH)</div>
-                <div className="font-mono text-lg font-semibold text-text-primary">{intent.amount}</div>
+              {intent.action !== 'balance' && (
+                <>
+                  <div className="glass-panel p-4">
+                    <div className="text-xs text-text-secondary font-medium mb-1 uppercase tracking-wide">
+                      {intent.action === 'send_usdc' ? 'Amount (USDC)' : 'Amount (ETH)'}
+                    </div>
+                    <div className="font-mono text-lg font-semibold text-text-primary">{intent.amount}</div>
+                  </div>
+                  <div className="glass-panel p-4">
+                    <div className="text-xs text-text-secondary font-medium mb-1 uppercase tracking-wide">Recipient</div>
+                    <div className="font-mono text-lg font-semibold text-text-primary truncate" title={intent.recipient}>{intent.recipient}</div>
+                  </div>
+                </>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* Wallet Balance Panel for balance intent */}
+        {walletBalance && (
+          <section className="glass-card p-6 animate-card opacity-0 relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-accent/5 rounded-bl-full pointer-events-none"></div>
+            
+            <div className="flex items-center gap-2 mb-6">
+              <Wallet className="w-5 h-5 text-accent" />
+              <h2 className="text-lg font-semibold">Wallet Balance (Sepolia)</h2>
+            </div>
+            
+            <div className="glass-panel p-5 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 mb-4">
+              <div className="flex justify-between items-center py-2 border-b border-surface-border/50">
+                <span className="text-sm text-text-secondary">Network</span>
+                <span className="font-mono text-sm font-medium uppercase">{walletBalance.network} Testnet</span>
               </div>
-              <div className="glass-panel p-4">
-                <div className="text-xs text-text-secondary font-medium mb-1 uppercase tracking-wide">Recipient</div>
-                <div className="font-mono text-lg font-semibold text-text-primary truncate" title={intent.recipient}>{intent.recipient}</div>
+              <div className="flex justify-between items-center py-2 border-b border-surface-border/50">
+                <span className="text-sm text-text-secondary">Available Balance</span>
+                <span className="font-mono text-base font-bold text-accent">
+                  {walletBalance.balanceEth} ETH
+                </span>
+              </div>
+              <div className="md:col-span-2 flex flex-col md:flex-row md:justify-between md:items-center py-2 border-surface-border/50 gap-2">
+                <span className="text-sm text-text-secondary shrink-0">Account Address</span>
+                <span className="font-mono text-sm text-text-primary bg-surface/50 border border-surface-border px-3 py-1 rounded-lg break-all">
+                  {walletBalance.walletAddress}
+                </span>
               </div>
             </div>
           </section>
@@ -418,19 +495,39 @@ function App() {
                 <span className="font-mono text-sm font-medium">{preview.network}</span>
               </div>
               <div className="flex justify-between items-center py-2 border-b border-surface-border/50">
+                <span className="text-sm text-text-secondary">Asset</span>
+                <span className="font-mono text-sm font-bold text-accent">{preview.asset || (intent?.action === 'send_usdc' ? 'USDC' : 'ETH')}</span>
+              </div>
+              <div className="flex justify-between items-center py-2 border-b border-surface-border/50">
+                <span className="text-sm text-text-secondary">Transfer Amount</span>
+                <span className="font-mono text-sm font-medium">
+                  {preview.amount || preview.amountEth} {preview.asset || (intent?.action === 'send_usdc' ? 'USDC' : 'ETH')}
+                </span>
+              </div>
+              <div className="flex justify-between items-center py-2 border-b border-surface-border/50">
                 <span className="text-sm text-text-secondary">Simulation Status</span>
                 <span className={`font-mono text-sm font-bold ${preview.simulationStatus === 'success' ? 'text-success' : 'text-danger'}`}>
                   {preview.simulationStatus.toUpperCase()}
                 </span>
               </div>
               <div className="flex justify-between items-center py-2 border-b border-surface-border/50">
-                <span className="text-sm text-text-secondary">Total Cost (ETH)</span>
-                <span className="font-mono text-sm font-medium">{preview.totalCostEth}</span>
+                <span className="text-sm text-text-secondary">
+                  {preview.asset === 'USDC' ? 'Gas Cost (ETH)' : 'Total Cost (ETH)'}
+                </span>
+                <span className="font-mono text-sm font-medium">{preview.gasCostEth || preview.totalCostEth} ETH</span>
               </div>
               <div className="flex justify-between items-center py-2 border-b border-surface-border/50">
                 <span className="text-sm text-text-secondary">Estimated Gas</span>
                 <span className="font-mono text-sm font-medium">{preview.estimatedGas}</span>
               </div>
+              {preview.contractAddress && (
+                <div className="md:col-span-2 flex flex-col md:flex-row md:justify-between md:items-center py-2 border-b border-surface-border/50 gap-2">
+                  <span className="text-sm text-text-secondary shrink-0">USDC Contract</span>
+                  <span className="font-mono text-xs text-text-secondary bg-surface/50 border border-surface-border px-3 py-1 rounded-lg break-all">
+                    {preview.contractAddress}
+                  </span>
+                </div>
+              )}
               <div className="md:col-span-2 flex flex-col md:flex-row md:justify-between md:items-center py-2 border-surface-border/50 gap-2">
                 <span className="text-sm text-text-secondary shrink-0">Resolved Address</span>
                 <span className="font-mono text-sm text-accent bg-accent/10 px-3 py-1 rounded-lg break-all">
@@ -503,7 +600,9 @@ function App() {
               ) : (
                 <>
                   <CheckCircle2 className="w-6 h-6" />
-                  <span>Confirm & Send {preview.amountEth} ETH</span>
+                  <span>
+                    Confirm & Send {intent?.action === 'send_usdc' ? (preview.amount || preview.amountEth) : preview.amountEth} {intent?.action === 'send_usdc' ? 'USDC' : 'ETH'}
+                  </span>
                 </>
               )}
             </button>
@@ -515,7 +614,29 @@ function App() {
           <section className="glass-card p-6 animate-card opacity-0">
             <h2 className="text-lg font-semibold mb-4">Execution Status</h2>
             
-            {executionResult.success ? (
+            {executionResult.pending ? (
+              <div className="bg-warn/10 border border-warn/30 rounded-xl p-6 text-center">
+                <div className="w-16 h-16 bg-warn/20 text-warn rounded-full flex items-center justify-center mx-auto mb-4">
+                  <AlertTriangle className="w-8 h-8" />
+                </div>
+                <h3 className="text-xl font-bold text-warn mb-2">Confirmation Pending</h3>
+                <p className="text-text-secondary text-sm mb-4">
+                  {executionResult.message || 'Transaction was broadcasted, but confirmation timed out on Sepolia. Do not re-submit.'}
+                </p>
+                
+                {executionResult.hash && (
+                  <a 
+                    href={`https://sepolia.etherscan.io/tx/${executionResult.hash}`} 
+                    target="_blank" 
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-surface border border-surface-border rounded-lg text-accent hover:bg-accent/10 transition-colors font-mono text-sm break-all"
+                  >
+                    <ExternalLink className="w-4 h-4 shrink-0" />
+                    <span className="truncate max-w-[200px] sm:max-w-md">{executionResult.hash}</span>
+                  </a>
+                )}
+              </div>
+            ) : executionResult.success ? (
               <div className="bg-success/10 border border-success/30 rounded-xl p-6 text-center">
                 <div className="w-16 h-16 bg-success/20 text-success rounded-full flex items-center justify-center mx-auto mb-4">
                   <CheckCircle2 className="w-8 h-8" />

@@ -1,42 +1,85 @@
 import { Type, Schema } from '@google/genai';
 import { generateContentWithSchema } from './llm';
+import { parseFallbackIntent, FallbackIntent } from './fallback';
+
+export { parseFallbackIntent, FallbackIntent };
 
 const intentSchema: Schema = {
   type: Type.OBJECT,
   properties: {
     action: {
       type: Type.STRING,
-      description: "The action to perform. Must be either 'balance' or 'send'."
+      description: "The action to perform. Must be either 'balance', 'send_eth', or 'send_usdc'."
     },
     confidence: {
       type: Type.NUMBER,
       description: "The model's confidence in this extraction between 0.0 and 1.0. Set to 0 if the user is asking for an unsupported action, being ambiguous, or not making a clear request."
     },
     amount: {
-      type: Type.NUMBER,
-      description: "For 'send' actions, the amount of ETH to send. Omit for 'balance' or unsupported actions."
+      type: Type.STRING,
+      description: "For 'send_eth' or 'send_usdc' actions, the amount as a positive decimal string (e.g. '0.0001' or '10'). Omit for 'balance' or unsupported actions."
     },
     recipient: {
       type: Type.STRING,
-      description: "For 'send' actions, the name of the recipient. Omit for 'balance' or unsupported actions."
+      description: "For 'send_eth' or 'send_usdc' actions, the name of the recipient. Omit for 'balance' or unsupported actions."
     }
   },
   required: ['action', 'confidence']
 };
 
 export const deps = {
-    generateFn: generateContentWithSchema
+    generateFn: generateContentWithSchema,
+    timeoutMs: 10000
 };
 
 export async function extractIntent(
     text: string
 ): Promise<any> {
-    const prompt = `You are an intent extraction engine for an Ethereum wallet. Convert the following natural language request into a strict intent schema. Supported actions are 'balance' and 'send'. Omit unsupported actions or give them a confidence of 0.\n\nRequest: "${text}"`;
-    const responseText = await deps.generateFn(prompt, intentSchema);
+    const prompt = `You are an intent extraction engine for an Ethereum wallet on Sepolia. Convert the following natural language request into a strict intent schema. Supported actions are 'balance', 'send_eth', and 'send_usdc'. Omit unsupported actions or give them a confidence of 0.\n\nRequest: "${text}"`;
 
-    if (!responseText) {
-        throw new Error("Failed to extract intent");
+    let geminiSuccess = false;
+    let geminiResult: any = null;
+
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+            reject(new Error('Gemini API call timed out'));
+        }, deps.timeoutMs);
+        if (timeoutHandle.unref) timeoutHandle.unref();
+    });
+
+    try {
+        const responseText = await Promise.race([
+            deps.generateFn(prompt, intentSchema),
+            timeoutPromise
+        ]);
+
+        if (typeof responseText === 'string' && responseText.trim().length > 0) {
+            const parsed = JSON.parse(responseText);
+            if (
+                parsed &&
+                typeof parsed === 'object' &&
+                !Array.isArray(parsed) &&
+                typeof parsed.action === 'string' &&
+                typeof parsed.confidence === 'number'
+            ) {
+                geminiSuccess = true;
+                geminiResult = parsed;
+            }
+        }
+    } catch {
+        geminiSuccess = false;
+    } finally {
+        if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+        }
     }
 
-    return JSON.parse(responseText);
+    if (geminiSuccess && geminiResult) {
+        return geminiResult;
+    }
+
+    // Gemini extraction failed, timed out, returned unusable/empty output, or was unavailable.
+    // Invoke the deterministic regex fallback parser.
+    return parseFallbackIntent(text);
 }

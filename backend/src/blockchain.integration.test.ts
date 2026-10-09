@@ -8,15 +8,19 @@ import path from 'path';
 // Load real env vars (which sets SEPOLIA_RPC_URL)
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
-// Override to an empty wallet for testing insufficient balance, ensuring it fails correctly
-process.env.SEPOLIA_PRIVATE_KEY = '0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+
+// Dynamically generate an empty wallet for testing insufficient balance, avoiding hardcoded key literals
+const dummyTestPrivateKey = generatePrivateKey();
+process.env.SEPOLIA_PRIVATE_KEY = dummyTestPrivateKey;
+const dummyTestAccount = privateKeyToAccount(dummyTestPrivateKey);
 
 describe('Blockchain Module (Integration - Requires Live RPC)', () => {
   it('should hit the real Sepolia RPC and report insufficient balance for empty wallet', { timeout: 30000 }, async () => {
     // Dynamically import blockchain AFTER env vars are established
     const { constructUnsignedTransaction } = await import('./blockchain');
 
-    const intent: SendIntent = { action: 'send', amount: 9999, confidence: 0.99, recipient: 'Rahul' };
+    const intent: SendIntent = { action: 'send_eth', amount: '9999', confidence: 0.99, recipient: 'Rahul' };
     const resolvedAddress = '0x1234567890123456789012345678901234567890';
     
     try {
@@ -37,7 +41,7 @@ describe('Blockchain Module (Integration - Requires Live RPC)', () => {
     const unsignedTx = {
       to: '0x1234567890123456789012345678901234567890' as `0x${string}`,
       value: parseEther('9999'),
-      from: '0xFCAd0B19bB29D4674531d6f115237E16AfCE377c' as `0x${string}`,
+      from: dummyTestAccount.address,
       chainId: 11155111
     };
 
