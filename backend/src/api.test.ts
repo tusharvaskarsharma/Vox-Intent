@@ -278,7 +278,7 @@ describe('API Execute Endpoint - Approval Tokens', () => {
       recipient: '0x1D9f6830b29773733411736db3883cBA9a5f93AC',
       amount: 0.1,
       network: 'sepolia',
-      previewCostEth: '0.1001',
+      estimatedGas: '21000',
       expiresAt: Date.now() - 1000
     });
 
@@ -302,7 +302,7 @@ describe('API Execute Endpoint - Approval Tokens', () => {
       recipient: '0x1D9f6830b29773733411736db3883cBA9a5f93AC',
       amount: 0.2,
       network: 'sepolia',
-      previewCostEth: '0.2001',
+      estimatedGas: '21000',
       expiresAt: Date.now() + 50000
     });
 
@@ -326,7 +326,7 @@ describe('API Execute Endpoint - Approval Tokens', () => {
       recipient: '0x1d9f6830b29773733411736db3883cba9a5f93ac',
       amount: 0.1,
       network: 'sepolia',
-      previewCostEth: '0.1001',
+      estimatedGas: '21000',
       expiresAt: Date.now() + 50000
     });
 
@@ -381,7 +381,7 @@ describe('API Execute Endpoint - Approval Tokens', () => {
       recipient: '0x1d9f6830b29773733411736db3883cba9a5f93ac',
       amount: 6,
       network: 'sepolia',
-      previewCostEth: '6', // Example cost with 0 gas
+      estimatedGas: '21000', // Example cost with 0 gas
       expiresAt: Date.now() + 50000
     });
 

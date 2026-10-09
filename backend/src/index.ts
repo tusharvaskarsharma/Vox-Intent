@@ -17,7 +17,7 @@ export interface ApprovalTokenData {
   recipient: string;
   amount: number;
   network: string;
-  previewCostEth: string;
+  estimatedGas: string;
   expiresAt: number;
 }
 export const approvalTokens = new Map<string, ApprovalTokenData>();
@@ -137,7 +137,7 @@ app.post('/api/process', processLimiter, async (req, res) => {
         recipient: resolvedAddress!.toLowerCase(),
         amount: (intent as SendIntent).amount,
         network: preview.network,
-        previewCostEth: preview.totalCostEth,
+        estimatedGas: preview.estimatedGas,
         expiresAt: Date.now() + 5 * 60 * 1000 // 5 minutes
       });
     }
@@ -228,9 +228,9 @@ app.post('/api/execute', executeLimiter, async (req, res) => {
       return res.status(403).json({ error: 'Failed to reconstruct/simulate transaction during execution phase.', details: err.message });
     }
     
-    if (preview.network !== tokenData.network || preview.totalCostEth !== tokenData.previewCostEth) {
+    if (preview.network !== tokenData.network || preview.estimatedGas !== tokenData.estimatedGas || preview.amountEth !== tokenData.amount.toString()) {
       approvalTokens.delete(approvalToken);
-      return res.status(403).json({ error: 'Transaction preview changed since approval.' });
+      return res.status(403).json({ error: `Transaction preview changed since approval. Original gas estimate: ${tokenData.estimatedGas}, New gas estimate: ${preview.estimatedGas}` });
     }
     
     const firewallConfig: FirewallConfig = {
