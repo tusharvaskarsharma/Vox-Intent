@@ -10,8 +10,7 @@
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111827)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)
 ![Network](https://img.shields.io/badge/Network-Ethereum%20Sepolia-627EEA?logo=ethereum&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-164%20passing-16A34A)
-![License](https://img.shields.io/badge/status-prototype-F59E0B)
+
 
 </div>
 
