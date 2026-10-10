@@ -6,7 +6,6 @@ import {
   Mic,
   Send,
   Shield,
-  Zap,
   Info,
   CheckCircle2,
   AlertTriangle,
@@ -402,9 +401,11 @@ function App() {
       {/* Header */}
       <header className="flex items-center justify-between py-6 mb-8 border-b border-surface-border">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-accent to-accent-hover flex items-center justify-center shadow-lg shadow-accent/20">
-            <Zap className="w-5 h-5 text-white" />
-          </div>
+          <img
+            src="/logo.png"
+            alt="VoxIntent Logo"
+            className="w-10 h-10 rounded-xl object-contain shadow-lg shadow-accent/25 border border-white/10"
+          />
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-text-primary">VoxIntent</h1>
             <p className="text-xs font-medium text-text-secondary uppercase tracking-wider">Web3 Voice Firewall & Security Engine</p>

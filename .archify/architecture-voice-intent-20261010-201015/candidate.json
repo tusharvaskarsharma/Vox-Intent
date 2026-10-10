@@ -1,0 +1,335 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "VoiceIntent System Architecture",
+    "output": ".archify/architecture-voice-intent-20261010-201015/voice-intent.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/tusharvaskarsharma/Vox-Intent.git",
+      "provider": "github",
+      "revision": "dec9e4272ad87e384f12eed4dcdda3ac10e24556"
+    },
+    "views": [
+      {
+        "id": "extraction",
+        "label": "Intent Extraction",
+        "focus": ["client_app", "api_gateway", "extractor", "gemini_llm", "fallback_parser"],
+        "note": "Voice input is translated into structured JSON with a 10s timeout race and regex fallback."
+      },
+      {
+        "id": "firewall",
+        "label": "Intent Firewall",
+        "focus": ["address_book", "firewall", "token_vault"],
+        "note": "Deterministic risk engine evaluates confidence, resolves addresses, and issues single-use approval tokens."
+      },
+      {
+        "id": "execution",
+        "label": "EVM Execution",
+        "focus": ["blockchain_engine", "sepolia_rpc", "usdc_contract"],
+        "note": "Sepolia chain assertion, atomic token consumption, and pre/post balance delta audit checklist."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "client_app",
+      "type": "frontend",
+      "label": "Voice Client UI",
+      "sublabel": "React 19 + Web Speech",
+      "tag": "Plan Card & Audit",
+      "pos": [40, 280],
+      "size": [160, 64],
+      "sources": [
+        {
+          "path": "frontend/src/App.tsx",
+          "line": 70,
+          "end_line": 98,
+          "label": "Voice client state & speech handler"
+        }
+      ]
+    },
+    {
+      "id": "address_book",
+      "type": "database",
+      "label": "Contact Address Book",
+      "sublabel": "MongoDB Memory Server",
+      "tag": "contacts collection",
+      "pos": [300, 120],
+      "size": [160, 64],
+      "sources": [
+        {
+          "path": "backend/src/db.ts",
+          "line": 12,
+          "end_line": 31,
+          "label": "connectDB & getContactsCollection"
+        }
+      ]
+    },
+    {
+      "id": "api_gateway",
+      "type": "backend",
+      "label": "Express API Gateway",
+      "sublabel": "127.0.0.1:3000 Server",
+      "tag": "Helmet + RateLimit",
+      "pos": [300, 280],
+      "size": [160, 64],
+      "sources": [
+        {
+          "path": "backend/src/index.ts",
+          "line": 54,
+          "end_line": 83,
+          "label": "Express server & rate limiting"
+        }
+      ]
+    },
+    {
+      "id": "gemini_llm",
+      "type": "cloud",
+      "label": "Google Gemini Flash",
+      "sublabel": "@google/genai Schema",
+      "tag": "Structured JSON",
+      "pos": [576, 120],
+      "size": [160, 64],
+      "sources": [
+        {
+          "path": "backend/src/llm.ts",
+          "line": 3,
+          "end_line": 23,
+          "label": "generateContentWithSchema API call"
+        }
+      ]
+    },
+    {
+      "id": "extractor",
+      "type": "backend",
+      "label": "Intent Extractor",
+      "sublabel": "Zero-Trust Schema Parser",
+      "tag": "10s Timeout Race",
+      "pos": [576, 280],
+      "size": [160, 64],
+      "sources": [
+        {
+          "path": "backend/src/extractor.ts",
+          "line": 40,
+          "end_line": 64,
+          "label": "extractIntent with timeout race"
+        }
+      ]
+    },
+    {
+      "id": "fallback_parser",
+      "type": "backend",
+      "label": "Regex Fallback Parser",
+      "sublabel": "Deterministic Rules",
+      "tag": "Offline Fallback",
+      "pos": [576, 440],
+      "size": [160, 64],
+      "sources": [
+        {
+          "path": "backend/src/fallback.ts",
+          "line": 63,
+          "end_line": 70,
+          "label": "parseFallbackIntent regex rules"
+        }
+      ]
+    },
+    {
+      "id": "token_vault",
+      "type": "security",
+      "label": "Approval Token Vault",
+      "sublabel": "Single-Use Memory Map",
+      "tag": "5-Min TTL + UUIDv4",
+      "pos": [852, 120],
+      "size": [160, 64],
+      "sources": [
+        {
+          "path": "backend/src/index.ts",
+          "line": 212,
+          "end_line": 228,
+          "label": "Approval token issuance & binding"
+        }
+      ]
+    },
+    {
+      "id": "firewall",
+      "type": "security",
+      "label": "Intent Firewall",
+      "sublabel": "Deterministic Risk Engine",
+      "tag": "PASS / WARN / BLOCK",
+      "pos": [852, 280],
+      "size": [160, 64],
+      "sources": [
+        {
+          "path": "backend/src/firewall.ts",
+          "line": 23,
+          "end_line": 63,
+          "label": "evaluateRisk confidence & balance rules"
+        }
+      ]
+    },
+    {
+      "id": "blockchain_engine",
+      "type": "backend",
+      "label": "EVM Engine",
+      "sublabel": "viem Simulation & Signer",
+      "tag": "Pre/Post Balance Deltas",
+      "pos": [1136, 280],
+      "size": [160, 64],
+      "sources": [
+        {
+          "path": "backend/src/blockchain.ts",
+          "line": 14,
+          "end_line": 68,
+          "label": "publicClient, account & simulation"
+        }
+      ]
+    },
+    {
+      "id": "sepolia_rpc",
+      "type": "external",
+      "label": "Sepolia Ethereum RPC",
+      "sublabel": "Chain ID 11155111",
+      "tag": "Fail-Closed Guard",
+      "pos": [1420, 200],
+      "size": [160, 64],
+      "sources": [
+        {
+          "path": "backend/src/blockchain.ts",
+          "line": 134,
+          "end_line": 149,
+          "label": "assertSepoliaChainId guard"
+        }
+      ]
+    },
+    {
+      "id": "usdc_contract",
+      "type": "external",
+      "label": "Circle Sepolia USDC",
+      "sublabel": "0x1c7D4B... ERC-20",
+      "tag": "Official Contract",
+      "pos": [1420, 360],
+      "size": [160, 64],
+      "sources": [
+        {
+          "path": "backend/src/blockchain.ts",
+          "line": 21,
+          "end_line": 33,
+          "label": "Circle Sepolia USDC address verification"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "Deterministic Security Boundary (Zero-Trust)",
+      "wraps": ["firewall", "token_vault"]
+    },
+    {
+      "kind": "region",
+      "label": "Local Extraction Subsystem",
+      "wraps": ["extractor", "fallback_parser"]
+    },
+    {
+      "kind": "region",
+      "label": "Ethereum Sepolia Network",
+      "wraps": ["sepolia_rpc", "usdc_contract"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "client-to-gw",
+      "from": "client_app",
+      "to": "api_gateway",
+      "label": "voice input",
+      "variant": "emphasis"
+    },
+    {
+      "id": "gw-to-book",
+      "from": "api_gateway",
+      "to": "address_book",
+      "label": "resolve contact"
+    },
+    {
+      "id": "gw-to-ext",
+      "from": "api_gateway",
+      "to": "extractor",
+      "label": "extract intent"
+    },
+    {
+      "id": "ext-to-gemini",
+      "from": "extractor",
+      "to": "gemini_llm",
+      "label": "schema prompt"
+    },
+    {
+      "id": "ext-to-fallback",
+      "from": "extractor",
+      "to": "fallback_parser",
+      "label": "timeout fallback",
+      "variant": "dashed"
+    },
+    {
+      "id": "ext-to-firewall",
+      "from": "extractor",
+      "to": "firewall",
+      "label": "parsed intent"
+    },
+    {
+      "id": "firewall-to-vault",
+      "from": "firewall",
+      "to": "token_vault",
+      "label": "issue token",
+      "variant": "security"
+    },
+    {
+      "id": "firewall-to-chain",
+      "from": "firewall",
+      "to": "blockchain_engine",
+      "label": "simulate & gate",
+      "variant": "security"
+    },
+    {
+      "id": "chain-to-rpc",
+      "from": "blockchain_engine",
+      "to": "sepolia_rpc",
+      "label": "assert & broadcast"
+    },
+    {
+      "id": "chain-to-usdc",
+      "from": "blockchain_engine",
+      "to": "usdc_contract",
+      "label": "ERC-20 transfer"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Zero-Trust Intent Firewall",
+      "items": [
+        "Google Gemini extracts structured JSON intents but cannot sign or broadcast transactions",
+        "Deterministic rule engine enforces confidence >= 0.90, balance limits, and Circle USDC contract match",
+        "Issues cryptographic single-use UUID approval token with 5-minute TTL upon PASS verdict"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Execution & Balance Verification",
+      "items": [
+        "Pre-execution native ETH and USDC balances captured in canonical integer base units (bigint)",
+        "Atomic token consumption before async broadcast eliminates double-spend concurrency races",
+        "Post-receipt delta verification calculates observed integer balance deltas to generate 5-item audit checklist"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Safety & Network Guarantees",
+      "items": [
+        "Strict fail-closed startup and pre-flight assertions for Sepolia Chain ID 11155111",
+        "Deterministic regex fallback parser handles core transfers if LLM extraction times out (10s)",
+        "Local server binds exclusively to 127.0.0.1 with Helmet security headers and rate limiting"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "D:\\VoiceIntent\\.archify\\architecture-voice-intent-20261010-201015\\candidate.json",
+    "sha256": "38a8d96791745daddc9ce634fd20f3551c71076b8bedbbf61edaff86c83d513b",
+    "bytes": 9113
+  },
+  "artifact": {
+    "path": "D:\\VoiceIntent\\.archify\\architecture-voice-intent-20261010-201015\\voice-intent.html",
+    "sha256": "fd4a6b58e60339a53718859a78b9aafcf18e2e884c386ce167946b38c8a67992",
+    "bytes": 774437
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "D:\\VoiceIntent\\.archify\\architecture-voice-intent-20261010-201015\\voice-intent.finalize.json",
+    "summaryReceipt": "D:\\VoiceIntent\\.archify\\architecture-voice-intent-20261010-201015\\voice-intent.finalize-summary.json",
+    "browserCheckReceipt": "D:\\VoiceIntent\\.archify\\architecture-voice-intent-20261010-201015\\voice-intent.browser-check.json"
+  },
+  "visualReview": "not-requested",
+  "durationMs": 6064
+}
